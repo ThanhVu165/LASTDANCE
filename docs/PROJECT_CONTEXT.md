@@ -1,200 +1,161 @@
 # Bối cảnh dự án LASTDANCE
 
-Đây là tài liệu bối cảnh chuẩn để thành viên mới hoặc AI hiểu dự án trước khi sửa
-code. Trạng thái vận hành đo gần nhất nằm trong
-`docs/model_first_runtime_report_2026-08-21.md`.
+LASTDANCE hỗ trợ người tham gia AIC2026 tìm video bằng câu truy vấn tự nhiên. Đây
+là tài liệu bối cảnh sản phẩm; kiến trúc chi tiết nằm trong
+[`SYSTEM_ARCHITECTURE.md`](SYSTEM_ARCHITECTURE.md).
 
-## 1. Bài toán
+## 1. Ba bài toán
 
-LASTDANCE hỗ trợ ba dạng truy vấn video của vòng sơ tuyển AIC2026:
+- **KIS**: tìm và xếp hạng `(video_id, frame_id)` phù hợp với mô tả.
+- **QA**: tìm đúng video/time window rồi trả lời câu hỏi dựa trên evidence đó.
+- **TRAKE**: tìm đúng video và một frame cho mỗi moment theo đúng thứ tự.
 
-- **KIS**: người dùng nhập một mô tả tự nhiên và hệ thống xếp hạng các
-  `(video_id, frame_id)` phù hợp.
-- **QA**: truy vấn chứa cả mô tả sự kiện và câu hỏi. Hệ thống phải tìm đúng video,
-  đúng thời điểm rồi mới sinh câu trả lời.
-- **TRAKE**: truy vấn mô tả nhiều khoảnh khắc có thứ tự. Hệ thống phải tìm đúng
-  video và một frame cho từng khoảnh khắc.
-
-Trong giao diện thi, người dùng chỉ nhập nguyên văn câu truy vấn. Backend chịu
-trách nhiệm hiểu query, tìm kiếm, kiểm chứng, xếp hạng và trả tối đa 100 kết quả.
+Người dùng chỉ nhập nguyên câu query. Backend chịu trách nhiệm planning, recall,
+aggregation, verification, ranking và output Top 100.
 
 ## 2. Mục tiêu đánh giá
 
-Theo tài liệu vòng sơ tuyển trong `docs/Thong tin vong So tuyen AIC2026.pdf`, hệ
-thống được quan tâm tại các mốc `1, 5, 20, 50, 100`. Vì vậy:
+Thể lệ quan tâm các cutoff 1, 5, 20, 50 và 100. Vì vậy hệ thống phải đồng thời:
 
-- Top 1 phải ưu tiên hypothesis có bằng chứng đầy đủ nhất.
-- Top 5/20 phải phủ những video/segment hợp lý khác, không lặp vô ích.
-- Top 50/100 giữ recall và đa dạng nhưng vẫn phải xếp evidence mạnh lên trước.
-- QA chỉ đúng khi video/frame và answer cùng đúng.
-- TRAKE sai video nhận điểm rất thấp hoặc bằng không; đúng video nhưng lệch một số
-  moment có thể nhận điểm từng phần.
+- đưa hypothesis mạnh nhất lên Top 1;
+- giữ các video/window hợp lý trong Top 5/20;
+- bảo toàn recall và đa dạng evidence ở Top 50/100;
+- không lãng phí slot cho frame gần trùng nếu chúng không thêm evidence;
+- map đúng `frame_id` thật khi nộp.
 
-`backend/app/evaluation/official_metric.py` là implementation chuẩn của công thức
-đánh giá dùng trong kiểm thử offline.
+`backend/app/evaluation/official_metric.py` là implementation metric offline.
+Chỉ báo Recall@k khi dev set có ground truth tương ứng.
 
-## 3. Vì sao một vector hoặc một frame là chưa đủ
+## 3. Bản chất query
 
-Truy vấn thực tế thường mô tả một scene video, không phải một object đơn lẻ. Một
-query có thể đồng thời chứa:
+Query thực tế thường mô tả một scene hoặc diễn biến video, gồm nhiều thành phần:
 
-- nhiều nhân vật và vật thể;
-- màu sắc, số lượng và quan hệ không gian;
-- hành động hoặc thay đổi trạng thái;
-- nhiều cảnh theo thứ tự;
-- chữ xuất hiện trên màn hình;
-- câu hỏi chỉ trả lời được ở một thời điểm cụ thể.
+- nhân vật, object, số lượng và thuộc tính;
+- màu sắc, quan hệ không gian và bối cảnh;
+- hành động và thay đổi trạng thái;
+- nhiều scene theo thứ tự;
+- chữ trên màn hình, logo hoặc tên riêng;
+- câu hỏi chỉ trả lời được tại một thời điểm.
 
-Một keyframe có thể khớp “xe hơi” nhưng bỏ sót “màu đỏ”, hành động hoặc cảnh sau.
-Do đó kiến trúc gom nhiều evidence frame/window theo video trước khi rerank toàn
-bộ query.
+Một frame có thể khớp object nhưng thiếu hành động; một window có thể khớp hành
+động nhưng thiếu scene khác. Vì thế hệ thống phải tìm và tổng hợp **một tập
+evidence theo thời gian**, không dùng một vector đại diện toàn video.
 
-## 4. Dữ liệu và định danh
+## 4. Quyết định hướng phát triển
 
-Dataset không nằm trong Git. Cấu trúc chuẩn:
+Hướng chuẩn là **offline video evidence indexing + window-first model retrieval**:
+
+1. Offline tạo manifest, keyframe map, shot boundary, frame embedding,
+   video-window embedding, structured caption, OCR và object evidence.
+2. Qwen planner biến query thành scene/evidence plan có schema.
+3. Frame retriever và video-window retriever tạo candidate bổ sung cho nhau.
+4. Candidate được gom thành video hypothesis theo scene coverage và temporal order.
+5. Multimodal reranker/verifier chấm toàn bộ query với evidence window.
+6. Repair retrieval chỉ chạy khi model chỉ ra evidence còn thiếu.
+7. QA và TRAKE tái sử dụng verified retrieval thay vì xây recall riêng yếu hơn.
+
+KIS, QA và TRAKE sẽ dùng cùng `UnifiedQueryPlan`; khác biệt chỉ nằm ở task type và
+output. Chi tiết schema/migration nằm trong [`QUERY_PROCESSING.md`](QUERY_PROCESSING.md).
+
+OCR không phải trọng tâm duy nhất. Nó giải quyết visible text; video embedding giải
+quyết hành động/diễn biến; caption hỗ trợ lexical semantics; object hỗ trợ entity;
+shot/timestamp hỗ trợ temporal reasoning; ASR sau này giải quyết lời nói.
+
+## 5. Dữ liệu và định danh
+
+Dataset tham chiếu có 873 video và 177.321 keyframe:
 
 ```text
 data/
-  videos/<video_id>.mp4
-  keyframes/<video_id>/<NNN>.jpg
-  objects/<video_id>/<NNN>.json
-  features/<video_id>.npy
-  map-keyframes/<video_id>.csv
-  metadata/<video_id>.json
+  videos/
+  keyframes/
+  objects/
+  features/
+  map-keyframes/
+  metadata/
   index/
 ```
 
-Dataset tham chiếu hiện có 873 video và 177.321 keyframe.
+| Trường | Ý nghĩa |
+|---|---|
+| `video_id` | định danh video |
+| `local_idx` | thứ tự keyframe, dùng để đọc JPG/object/OCR |
+| `frame_id` | frame thật trong MP4, dùng cho API chính xác/submission |
+| `pts_time` | timestamp để join evidence và align moment |
+| `window_id` | định danh một cửa sổ thời gian trong video |
 
-Hai chỉ số không được nhầm:
+`keyframe_index.json` có đường dẫn tuyệt đối nên máy mới phải rebuild base index.
 
-| Trường | Ý nghĩa | Nơi sử dụng |
-|---|---|---|
-| `local_idx` | Số thứ tự keyframe trong một video | Đọc JPG/object/OCR nội bộ |
-| `frame_id` | Frame thật trong MP4, từ `frame_idx` của map CSV | API kết quả và file nộp |
+## 6. Vai trò model
 
-`keyframe_index.json` chứa đường dẫn tuyệt đối. Khi chuyển project sang thư mục
-khác trên máy khác, phải chạy lại `app.indexing.build_index`.
+| Model | Vai trò |
+|---|---|
+| organizer CLIP ViT-B/32 | baseline frame recall nhanh |
+| multilingual CLIP text tower | query tiếng Việt trong cùng image space |
+| Qwen3-VL-2B-Instruct | planner, verifier, VQA, offline structured caption |
+| Qwen3-VL-Embedding-2B | text/video-window embedding chung |
+| Qwen3-VL-Reranker-2B | query–video/window cross-modal rerank |
+| SigLIP2 base | optional complementary frame recall |
+| EasyOCR CRAFT + latin_g2 | visible-text extraction |
 
-## 5. Nguyên tắc kiến trúc model-first
+Model được chọn theo vai trò, phần cứng, latency và metric; không theo độ nổi
+tiếng. Một model score là evidence, không phải xác suất đúng đã hiệu chuẩn. Xem
+quyết định và challenger trong [`MODEL_SELECTION.md`](MODEL_SELECTION.md).
 
-1. **Model hiểu query**: Qwen sinh structured plan gồm scene, retrieval caption,
-   `must_have`, visible text, temporal edge và repair query.
-2. **Retriever mở rộng recall**: CLIP là đường production; OCR/object và side
-   indexes chỉ bổ sung evidence.
-3. **Video/window hypothesis**: nhiều frame cùng video được gom, làm mượt theo
-   thời gian và kiểm tra storyboard.
-4. **Model kiểm chứng**: multimodal model đánh giá toàn bộ điều kiện, không chỉ
-   object nổi bật nhất.
-5. **Repair có giới hạn**: khi pool đã kiểm chứng còn thiếu, planner sinh caption
-   nhắm vào evidence bị bỏ sót rồi truy hồi thêm một vòng.
-6. **Fallback rõ ràng**: lỗi model/index không được làm mất kết quả; hệ thống quay
-   về đường retrieval/tournament đã kiểm thử.
-
-Heuristic vẫn cần cho validation schema, mapping frame, giới hạn thời gian và
-fallback. Không dùng heuristic để vá từng query mẫu.
-
-## 6. Pipeline hiện tại
+## 7. Pipeline đích
 
 ### KIS
 
 ```text
-query
-  → Qwen structured planner
-  → CLIP/multilingual CLIP recall cho từng scene caption
-  → optional SigLIP2 và Qwen-window recall nếu index complete
-  → rank calibration + candidate union
-  → object/OCR fusion khi planner yêu cầu visible evidence
-  → temporal smoothing + ordered storyboard
-  → dedicated Qwen reranker nếu local checkpoint đầy đủ
-     hoặc Qwen instruct generative verifier theo nhóm
-  → một repair retrieval round nếu evidence chưa đủ
-  → chỉ ưu tiên verified pool khi có đủ 100 row
-  → cutoff-aware ranking + exact-frame Top 1
+query plan
+  → multi-channel frame/window recall
+  → calibrated fusion
+  → video/scene/temporal aggregation
+  → model rerank + verification
+  → one bounded repair round
+  → cutoff-aware Top 100
+  → exact-frame refinement
 ```
-
-API KIS trả thêm `model_relevance_score` và `model_verified` để phân biệt kết quả
-đã được model nhìn thấy với retrieval fallback.
 
 ### QA
 
 ```text
-query hoàn chỉnh
-  → tách event description và question
-  → KIS verified retrieval, không refine frame hai lần
-  → temporal contact sheet cho các video dẫn đầu
-  → Qwen kiểm tra event, chọn panel và trả answer
-  → chuẩn hóa ngôn ngữ/format
-  → cutoff-aware Top 100
+query plan
+  → shared verified video-window retrieval
+  → temporal context
+  → grounded VQA
+  → answer verification
+  → Top 100
 ```
-
-QA không được trả lời từ tên object hoặc OCR cache mà không nhìn evidence frame.
 
 ### TRAKE
 
 ```text
-query
-  → tách ordered moments
-  → recall riêng cho mỗi moment
-  → rank video theo coverage
-  → K-best monotonic alignment
-  → visual sequence rerank
-  → coarse-to-fine exact-frame refinement
-  → Top 100 sequence hypotheses
+ordered moment plan
+  → shared window recall per moment
+  → video coverage ranking
+  → monotonic alignment
+  → sequence verification
+  → exact-frame refinement
+  → Top 100 hypotheses
 ```
 
-TRAKE chưa dùng đầy đủ structured planner/shared verifier mới. Đây là backlog sau
-KIS và QA.
+## 8. Giới hạn phần cứng
 
-## 7. Model và trạng thái
+Máy tham chiếu: i5-12450H, RTX 4050 Laptop 6 GiB, Windows, Python 3.11. Các
+model 2B không cùng resident; builder và backend GPU chạy tuần tự. KIS có ngân
+sách 2–3 phút, QA/TRAKE 3–5 phút, nhưng mọi milestone vẫn phải đo P50/P95.
 
-| Vai trò | Model | Trạng thái |
-|---|---|---|
-| CLIP image space | `clip-ViT-B-32` | Production, feature organizer có sẵn |
-| Vietnamese query tower | `clip-ViT-B-32-multilingual-v1` | Production, CPU |
-| Planner/VQA/verifier | `Qwen/Qwen3-VL-2B-Instruct` | Production trên GPU 6 GB |
-| Dedicated reranker | `Qwen/Qwen3-VL-Reranker-2B` | Mục tiêu; checkpoint local chưa đầy đủ |
-| Frame side recall | `google/siglip2-base-patch16-256` | Code có, full index chưa build |
-| Video-window embedding | `Qwen/Qwen3-VL-Embedding-2B` | Model đã tải; partial index bị vô hiệu hóa |
-| OCR | EasyOCR CRAFT + `latin_g2` | Offline, có checkpoint; không chạy lúc thi |
-| ASR | Chưa chọn runtime production | Tạm hoãn |
+## 9. Trạng thái và giới hạn hiện tại
 
-Không coi tên model trong cấu hình là bằng chứng model đang được dùng. Kiểm tra
-`/health`, state `complete` và runtime report.
+- CLIP, KIS planner, generative verifier, repair và KIS/QA basic đang hoạt động.
+- Unified planner cho cả QA/TRAKE là target; hai pipeline này còn parser riêng.
+- Video-window builder có nhưng index mới 300/29.938 và bị vô hiệu vì partial.
+- Dedicated reranker chưa active; runtime dùng generative verifier.
+- SigLIP2 chưa có full index.
+- OCR collection chưa xác nhận complete; ASR hoãn.
+- TRAKE chưa dùng shared window/verifier.
+- Chưa có dev set đủ lớn để chứng minh accuracy toàn collection.
 
-## 8. Giới hạn phần cứng và chi phí
-
-Máy tham chiếu: i5-12450H, RTX 4050 Laptop 6 GiB, Windows, Python 3.11,
-PyTorch CUDA. Qwen instruct dùng khoảng 4,1–4,4 GiB VRAM nên:
-
-- không chạy OCR/index builder cùng backend;
-- dedicated embedding/reranker phải load tuần tự;
-- model 8B không phù hợp local FP16;
-- full video-window embedding có thể mất nhiều giờ dù online FAISS search nhanh.
-
-Runtime đã đo, không phải accuracy:
-
-- KIS HTTP Top 100: khoảng 94,9 giây, 100/100 row có model score;
-- QA HTTP Top 100: khoảng 82,6 giây trên query smoke;
-- 56/56 unit test pass tại checkpoint runtime.
-
-## 9. Những gì chưa được chứng minh
-
-- Chưa có dev set đủ lớn có ground truth trên dataset hiện tại.
-- Smoke test chứng minh contract, latency và khả năng chạy; không chứng minh mọi
-  Top 1 đều đúng.
-- Side index chưa được A/B bằng Recall@1/5/20/50/100.
-- Generative relevance score không hiệu chuẩn như xác suất; dedicated reranker vẫn
-  là hướng tốt hơn khi có checkpoint và benchmark.
-- OCR chưa hoàn tất toàn collection; ASR chưa có.
-
-## 10. Thứ tự phát triển
-
-1. Giữ KIS production ổn định và tạo dev set ground truth.
-2. Tải/benchmark dedicated reranker, chỉ thay verifier khi cải thiện rõ ràng.
-3. A/B SigLIP2 trên subset; không full build nếu recall không tăng.
-4. Chỉ resume Qwen-window index khi subset chứng minh lợi ích so với chi phí.
-5. Thêm answer verification cho QA.
-6. Đưa shared planner/verifier vào TRAKE.
-7. Bổ sung ASR timestamped sau cuộc thi.
-
+Xem số liệu mới nhất trong [`CURRENT_STATUS.md`](CURRENT_STATUS.md) và thứ tự
+phát triển trong [`DEVELOPMENT_ROADMAP.md`](DEVELOPMENT_ROADMAP.md).

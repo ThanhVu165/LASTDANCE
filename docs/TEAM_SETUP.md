@@ -1,35 +1,31 @@
-# Hướng dẫn dựng LASTDANCE trên máy khác
+# Dựng LASTDANCE trên máy khác
 
-Tài liệu này dành cho thành viên nhóm cần clone code, nhận dataset/model artifacts
-và chạy hệ thống độc lập. Các lệnh ưu tiên Windows PowerShell.
+Tài liệu này dành cho thành viên clone repository, nhận dataset/model artifact,
+build index và chạy hệ thống trên Windows PowerShell.
 
-## 1. Những gì Git có và không có
+## 1. Git chứa gì
 
-Git chứa source code, test, frontend và tài liệu. Git không chứa:
+Git chứa source, test, frontend và tài liệu. Git không chứa:
 
-- `data/`: video, keyframe, feature, object, metadata và generated indexes;
+- `data/` và generated indexes;
 - `.venv`;
-- Hugging Face/EasyOCR/Paddle model cache;
-- query thật, submission, log và secret.
+- Hugging Face/EasyOCR/model cache;
+- query thật, submission, log và credential.
 
-Vì vậy clone repository chưa đủ để search. Thành viên cần nhận dataset qua ổ cứng,
-NAS hoặc cloud nội bộ đúng quyền sử dụng của cuộc thi.
+Clone code chưa đủ để search. Dataset và model artifact phải được chia sẻ qua kênh
+nội bộ đúng quyền sử dụng của cuộc thi.
 
 ## 2. Yêu cầu máy
 
-Khuyến nghị tối thiểu:
+- Windows 10/11 64-bit, Python 3.11;
+- tối thiểu 16 GiB RAM, khuyến nghị 32 GiB;
+- NVIDIA GPU 6 GiB VRAM trở lên cho các model Qwen 2B;
+- driver tương thích PyTorch CUDA;
+- đủ đĩa cho dataset, model cache và feature/index trung gian.
 
-- Windows 10/11 64-bit;
-- Python 3.11;
-- 16 GiB RAM, khuyến nghị 32 GiB;
-- khoảng 50 GiB trống ngoài dung lượng dataset;
-- NVIDIA GPU 6 GiB VRAM trở lên cho Qwen 2B;
-- driver NVIDIA tương thích wheel PyTorch CUDA đang dùng.
+Máy 6 GiB chỉ chạy một workload GPU tại một thời điểm.
 
-CPU-only có thể build CLIP/FAISS và chạy API cơ bản nhưng Qwen planner/QA sẽ rất
-chậm. Nếu dùng CPU, phải đặt device rõ ràng; không để hệ thống âm thầm fallback.
-
-## 3. Clone và xử lý Git ownership
+## 3. Clone và Git ownership
 
 ```powershell
 cd C:\
@@ -39,39 +35,30 @@ git remote -v
 git status
 ```
 
-Nếu repository được tạo/chỉnh bởi tài khoản sandbox hoặc administrator, Git có
-thể báo `detected dubious ownership`. Với repository đã xác minh đúng đường dẫn:
+Nếu Git báo `detected dubious ownership`, sau khi xác minh đúng repo:
 
 ```powershell
 git config --global --add safe.directory C:/LASTDANCE
 git status
 ```
 
-Không dùng `safe.directory '*'`. Không đổi owner toàn ổ đĩa chỉ để sửa một repo.
-Có thể kiểm tra các exception bằng:
+Không dùng `safe.directory '*'`.
 
-```powershell
-git config --global --get-all safe.directory
-```
-
-## 4. Tạo backend environment
+## 4. Backend environment
 
 ```powershell
 cd C:\LASTDANCE\backend
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-
-# Máy NVIDIA tham chiếu
 .\.venv\Scripts\python.exe -m pip install `
   torch==2.12.1 torchvision==0.27.1 `
   --index-url https://download.pytorch.org/whl/cu130
-
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Không cài VietOCR vào environment production hiện tại: phiên bản đó pin Pillow
-khác với frontend/backend. Nếu cần benchmark VietOCR, tạo environment riêng.
+Không cài VietOCR vào environment này vì phiên bản hiện dùng pin Pillow 10.2.0,
+trong khi project dùng Pillow 11.0.0. Nếu cần benchmark, tạo environment riêng.
 
 Kiểm tra CUDA:
 
@@ -79,10 +66,9 @@ Kiểm tra CUDA:
 .\.venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
 ```
 
-## 5. Frontend dependencies
+## 5. Frontend
 
-Streamlit hiện có thể dùng chung backend `.venv` nếu đã cài đủ package. Cách tách
-environment nhẹ hơn:
+Có thể dùng chung backend venv hoặc tạo venv riêng:
 
 ```powershell
 cd C:\LASTDANCE\frontend
@@ -90,53 +76,31 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Nếu dùng frontend venv riêng, thay đường dẫn Python trong lệnh khởi động ở mục 10.
+## 6. Nhận và kiểm tra dataset
 
-## 6. Chép dataset
-
-Sau khi chép, cấu trúc tối thiểu phải là:
+Cấu trúc tối thiểu:
 
 ```text
-C:\LASTDANCE\data\features\<video_id>.npy
-C:\LASTDANCE\data\keyframes\<video_id>\001.jpg
-C:\LASTDANCE\data\map-keyframes\<video_id>.csv
+data/features/<video_id>.npy
+data/keyframes/<video_id>/<NNN>.jpg
+data/map-keyframes/<video_id>.csv
 ```
 
-Để dùng object/OCR/exact-frame còn cần:
+Để có đầy đủ evidence cần thêm:
 
 ```text
-data\objects\<video_id>\001.json
-data\videos\<video_id>.mp4
-data\metadata\<video_id>.json
+data/videos/<video_id>.mp4
+data/objects/<video_id>/<NNN>.json
+data/metadata/<video_id>.json
 ```
 
-Máy tham chiếu hiện có 873 video và 177.321 keyframe. So sánh số lượng trước khi
-build để tránh index lệch dataset.
+Dataset tham chiếu hiện có 873 video và 177.321 keyframe. So sánh inventory trước
+khi build. Thiết kế manifest/shot validator là milestone tiếp theo; hiện thành viên
+phải kiểm tra count và sample thủ công.
 
-## 7. Build production indexes
+## 7. Tải model
 
-Chạy trên từng máy sau khi data nằm đúng vị trí, vì `keyframe_index.json` lưu
-đường dẫn tuyệt đối:
-
-```powershell
-cd C:\LASTDANCE\backend
-$env:PYTHONPATH = "C:\LASTDANCE\backend"
-.\.venv\Scripts\python.exe -m app.indexing.build_index
-```
-
-Kết quả bắt buộc:
-
-- `data/index/keyframe_index.json`;
-- `data/index/clip.faiss`;
-- `data/index/objects_cache.json`.
-
-OCR cache/state dùng key `video_id:local_idx` và có thể chuyển giữa các máy nếu
-dataset và chữ ký model/config giống hệt. Tuy vậy phải kiểm tra state trước, không
-copy một cache dở rồi đánh dấu complete.
-
-## 8. Model artifacts
-
-Các model public có thể tải bằng Hugging Face CLI:
+Model runtime bắt buộc:
 
 ```powershell
 cd C:\LASTDANCE\backend
@@ -144,25 +108,91 @@ cd C:\LASTDANCE\backend
 .\.venv\Scripts\hf.exe download sentence-transformers/clip-ViT-B-32-multilingual-v1
 ```
 
-Optional, không chặn production:
+Model cho hướng video-window/rerank:
 
 ```powershell
-.\.venv\Scripts\hf.exe download Qwen/Qwen3-VL-Reranker-2B
-.\.venv\Scripts\hf.exe download google/siglip2-base-patch16-256
 .\.venv\Scripts\hf.exe download Qwen/Qwen3-VL-Embedding-2B
+.\.venv\Scripts\hf.exe download Qwen/Qwen3-VL-Reranker-2B
 ```
 
-Đặt `HF_TOKEN` nếu tài khoản nhóm có token để tránh rate limit. Cảnh báo symlink
-trên Windows không làm model sai nhưng có thể tốn thêm dung lượng; bật Developer
-Mode nếu muốn Hugging Face dùng symlink hiệu quả.
+Optional frame recall:
 
-Runtime model-first giữ `local_files_only` cho model lớn. Mục tiêu là request
-không bao giờ đứng vì tự tải checkpoint giữa cuộc thi.
+```powershell
+.\.venv\Scripts\hf.exe download google/siglip2-base-patch16-256
+```
 
-## 9. Cấu hình qua environment variables
+Model lớn phải tải trước, không để API request tự tải. Có thể đặt `HF_TOKEN` qua
+environment; không ghi token vào Git hoặc remote URL.
 
-Ứng dụng đọc trực tiếp biến môi trường; hiện không tự load `.env`. Đặt biến trong
-terminal trước khi khởi động. Profile RTX 4050 6 GiB mặc định:
+Không cài Paddle OCR challenger vào production venv. Tạo environment riêng để
+tránh lặp lỗi CUDA/Pillow; chỉ chuyển baseline sau benchmark theo
+[`MODEL_SELECTION.md`](MODEL_SELECTION.md).
+
+## 8. Build base index
+
+Mỗi máy phải rebuild vì `keyframe_index.json` lưu path tuyệt đối:
+
+```powershell
+cd C:\LASTDANCE\backend
+$env:PYTHONPATH = "C:\LASTDANCE\backend"
+.\.venv\Scripts\python.exe -m app.indexing.build_index
+```
+
+Artifact bắt buộc:
+
+- `keyframe_index.json`;
+- `clip.faiss`;
+- `objects_cache.json`.
+
+## 9. Build video-window index
+
+Builder hiện có và checkpoint được. Chạy subset đầu tiên:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.indexing.video_window_index `
+  --limit 100 --batch-size 1 --checkpoint-every 25 `
+  --window-size 6 --stride 6
+```
+
+Kiểm tra `data/index/video_window_state.json`. Chỉ resume full sau khi subset đã
+được đánh giá:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.indexing.video_window_index `
+  --batch-size 1 --checkpoint-every 50 `
+  --window-size 6 --stride 6
+```
+
+Builder resume từ `next_index`. Nếu đổi model/dim/window/stride/pixel/dataset,
+signature sẽ khác; di chuyển artifact cũ sang nơi lưu trữ trước khi build mới.
+Không sửa `complete=true` thủ công.
+
+Shot boundary, manifest validator và structured caption index được mô tả trong
+[`OFFLINE_INDEXING.md`](OFFLINE_INDEXING.md) nhưng **chưa có command production**.
+
+## 10. OCR và optional SigLIP2
+
+OCR smoke:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.indexing.ocr_index `
+  --limit 20 --checkpoint-every 5
+```
+
+Resume OCR bằng cùng lệnh không `--limit`. Có thể dừng bằng `Ctrl+C`; checkpoint
+đã atomic-write vẫn còn. Không xóa cache/state chỉ vì muốn chạy lại.
+
+SigLIP2 subset:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.indexing.siglip_index `
+  --limit 100 --batch-size 8 --checkpoint-every 50
+```
+
+SigLIP2 là optional side index. Chỉ build full nếu A/B cho thấy recall bổ sung so
+với CLIP + Qwen-window.
+
+## 11. Cấu hình runtime
 
 ```powershell
 $env:AIC_VQA_DEVICE = "cuda:0"
@@ -173,16 +203,11 @@ $env:AIC_MODEL_REPAIR_ENABLED = "1"
 $env:AIC_MODEL_RERANK_LOCAL_FILES_ONLY = "1"
 ```
 
-Chế độ khẩn cấp nếu KIS vượt ngân sách:
+Không cần flag để “ép bật” side index. Loader chỉ dùng nó khi state complete và
+artifact tồn tại. Khi model 2B chạy query window, runtime giải phóng instruct VLM
+trước để tránh OOM.
 
-```powershell
-$env:AIC_MODEL_RERANK_TOP_VIDEOS = "24"
-```
-
-Không tắt VQA cho QA. Không bật SigLIP/video-window bằng biến môi trường; các kênh
-này chỉ hoạt động khi index và state hoàn chỉnh được publish.
-
-## 10. Kiểm thử trước khi chạy
+## 12. Test
 
 ```powershell
 cd C:\LASTDANCE\backend
@@ -190,16 +215,9 @@ cd C:\LASTDANCE\backend
 .\.venv\Scripts\python.exe -m unittest discover -s tests -q
 ```
 
-Smoke KIS không exact-frame:
+Smoke GPU chỉ chạy sau khi dừng backend và các builder khác.
 
-```powershell
-.\.venv\Scripts\python.exe -m app.evaluation.round1_smoke `
-  --query tkis-charity --top-k 100
-```
-
-Không chạy smoke GPU khi backend hoặc OCR đang giữ VRAM.
-
-## 11. Khởi động
+## 13. Khởi động
 
 Backend:
 
@@ -210,7 +228,7 @@ $env:PYTHONPATH = "C:\LASTDANCE\backend"
   --host 127.0.0.1 --port 8000
 ```
 
-Frontend dùng chung backend venv:
+Frontend dùng backend venv:
 
 ```powershell
 cd C:\LASTDANCE\frontend
@@ -218,37 +236,22 @@ C:\LASTDANCE\backend\.venv\Scripts\python.exe -m streamlit run `
   streamlit_app.py --server.address 127.0.0.1 --server.port 8501
 ```
 
-Kiểm tra:
+`/health` phải báo CUDA/VQA ready. `video_window_index_ready=false` là đúng nếu
+state partial. Sau khi publish full index, restart backend để loader nhìn artifact.
 
-- `http://127.0.0.1:8000/health`;
-- `http://127.0.0.1:8501`.
+## 14. Vận hành GPU
 
-`/health` phải có `cuda_available=true`, `vqa_ready=true`, planner/rerank/repair
-đúng profile. `siglip_index_ready=false` hoặc `video_window_index_ready=false` là
-bình thường nếu chưa build side index.
+Trước khi chạy offline builder:
 
-## 12. Chạy trên hai máy hoặc LAN
+1. dừng backend;
+2. kiểm tra `nvidia-smi`;
+3. chạy đúng một builder;
+4. ghi ETA/progress/state;
+5. dừng builder trước khi mở API.
 
-Frontend hiện gọi backend tại `127.0.0.1:8000`, nên cấu hình chuẩn là frontend và
-backend cùng một máy. Muốn tách máy cần đưa API base URL thành environment setting
-trước; không mở `0.0.0.0`/firewall trong lúc thi nếu chưa kiểm tra bảo mật mạng.
+Không chạy OCR, SigLIP, Qwen embedding/reranker và backend đồng thời trên GPU 6 GiB.
 
-Dataset/model license và thể lệ cuộc thi phải được tuân thủ khi chia sẻ artifact.
-
-## 13. Dừng dịch vụ và chuyển sang indexing
-
-Đóng terminal dịch vụ hoặc dừng đúng PID trước khi chạy OCR/builder. Xác nhận VRAM:
-
-```powershell
-nvidia-smi
-```
-
-Không chạy đồng thời backend Qwen với OCR, SigLIP hoặc Qwen embedding builder trên
-GPU 6 GiB.
-
-## 14. Commit và push
-
-Từ repository root:
+## 15. Commit và push
 
 ```powershell
 cd C:\LASTDANCE
@@ -256,24 +259,21 @@ git status
 git diff --check
 git add README.md AGENTS.md docs backend frontend
 git status
-git commit -m "Document model-first architecture and team setup"
+git commit -m "Adopt video-window model-first architecture"
 git push origin main
 ```
 
-Xem lại danh sách staged trước commit để chắc chắn `data/`, model hoặc secret
-không xuất hiện. Nếu push yêu cầu đăng nhập, dùng Git Credential Manager hoặc SSH
-key của tài khoản có quyền với `ThanhVu165/LASTDANCE`; không ghi token vào remote
-URL hoặc file trong repository.
+Kiểm tra staged files để chắc chắn `data/`, cache, query và secret không xuất hiện.
 
-## 15. Troubleshooting nhanh
+## 16. Troubleshooting
 
-| Triệu chứng | Cách xử lý |
+| Triệu chứng | Xử lý |
 |---|---|
-| `dubious ownership` | Thêm đúng repo vào `safe.directory`, không dùng wildcard |
-| `VQA requested cuda` | Kiểm tra đúng `.venv`, wheel CUDA và driver |
-| CUDA OOM | Dừng OCR/builder/backend khác; giảm top video nếu khẩn cấp |
-| KIS treo tải model | Giữ local-only; tải model bằng CLI trước khi chạy API |
-| Kết quả trả `local_idx` sai | Rebuild index và kiểm tra map-keyframes |
-| Side index không hoạt động | Kiểm tra state `complete=true` và file FAISS tồn tại |
-| Máy mới không mở được keyframe | `keyframe_index.json` có path máy cũ; rebuild |
-
+| Git dubious ownership | thêm đúng `C:/LASTDANCE` vào safe.directory |
+| VQA requested CUDA | kiểm tra đúng `.venv`, wheel CUDA và driver |
+| CUDA OOM | dừng workload GPU khác; không âm thầm chuyển CPU |
+| API đứng tải model | tải model trước; giữ local-only cho model lớn |
+| Sai `frame_id` | rebuild base index và kiểm tra map-keyframes |
+| Window index không active | kiểm tra metadata/FAISS/state `complete=true` |
+| Signature mismatch | lưu artifact cũ và build mới, không resume chéo config |
+| Path keyframe máy cũ | rebuild `app.indexing.build_index` |

@@ -1,181 +1,182 @@
-# AI collaboration guide cho LASTDANCE
+# Hướng dẫn cộng tác với AI trong LASTDANCE
 
-Tài liệu này giúp thành viên dùng Codex, Copilot hoặc agent khác mà không biến
-pipeline thành tập hợp các bản vá theo query mẫu. `AGENTS.md` là contract ngắn bắt
-buộc; file này giải thích quy trình cộng tác chi tiết hơn.
+Mục tiêu của tài liệu này là giúp thành viên dùng coding agent mà vẫn giữ kiến
+trúc video-window/model-first, không tạo tập hợp patch theo query mẫu.
 
-## 1. Context cần cung cấp cho AI
+## 1. Context bắt buộc
 
-Khi bắt đầu một task mới, yêu cầu AI đọc:
+Yêu cầu AI đọc:
 
 1. `AGENTS.md`;
 2. `docs/PROJECT_CONTEXT.md`;
-3. file pipeline/config liên quan;
-4. test hiện hữu;
-5. runtime report gần nhất.
+3. `docs/SYSTEM_ARCHITECTURE.md`;
+4. `docs/QUERY_PROCESSING.md` nếu task liên quan query/pipeline;
+5. `docs/OFFLINE_INDEXING.md` nếu task liên quan data/index;
+6. `docs/MODEL_SELECTION.md` nếu task chọn/thay model;
+7. `docs/CURRENT_STATUS.md`;
+8. pipeline/config/test liên quan.
 
 Mẫu yêu cầu:
 
 ```text
-Đọc AGENTS.md và docs/PROJECT_CONTEXT.md trước. Hãy thay đổi <phạm vi> nhưng giữ
-contract Top 100, mapping frame_id và fallback hiện tại. Chạy compile + unittest,
-báo latency/VRAM nếu đụng tới model, không sửa theo query mẫu.
+Đọc AGENTS.md và các tài liệu kiến trúc chuẩn. Thay đổi <phạm vi> nhưng giữ Top
+100, mapping frame_id, index completeness gate và fallback. Không patch query
+mẫu. Hãy compile, chạy toàn bộ test; nếu thay retrieval/model, báo Recall@k trên
+ground truth, latency, VRAM và rollback.
 ```
-
-Không cần đưa dataset hoặc model cache vào prompt. Cho AI đường dẫn local và cho
-phép nó kiểm tra read-only khi cần.
 
 ## 2. Phân loại task
 
-### Chỉ phân tích
+### Phân tích
 
-Yêu cầu AI đọc code, mô tả pipeline, tìm nguyên nhân hoặc đề xuất A/B. Không cho
-phép sửa file/push nếu chưa muốn triển khai.
+Chỉ đọc code/index/status, mô tả nguyên nhân và đề xuất A/B. Không tự đổi model,
+build full index hoặc push.
 
-### Thay đổi code
+### Thay đổi runtime
 
-Nêu rõ phạm vi KIS/QA/TRAKE/index/UI, giới hạn thời gian và phần cứng. AI phải sửa,
-test và ghi lại trạng thái; không dừng ở proposal.
+Nêu rõ KIS/QA/TRAKE, API contract và latency budget. Agent phải sửa, test và cập
+nhật status/docs nếu behavior thay đổi.
 
-### Index/model offline
+### Offline indexing
 
-Nêu rõ model, dataset subset/full, GPU được phép dùng và có thể dừng backend hay
-không. Builder phải checkpoint/resume và chỉ publish index khi complete.
+Nêu dataset subset/full, model, GPU và artifact. Agent phải kiểm tra signature,
+checkpoint/resume, atomic publish, metadata/vector count và state complete.
 
-### Vận hành cuộc thi
+### Vận hành
 
-Ưu tiên không thay code. Chỉ health check, start/restart đúng service, xác nhận
-GPU, chạy một smoke bounded và giữ fallback ổn định.
+Ưu tiên health check và service stability. Không build/tải model trong request
+path và không chạy hai workload GPU trên máy 6 GiB.
 
-## 3. Quy tắc chọn model
+## 3. Cách giao task model/index
 
-Đánh giá model theo vai trò, không theo độ nổi tiếng:
+Một task tốt phải trả lời:
 
-| Vai trò | Cần tối ưu |
-|---|---|
-| Query planner | JSON validity, multilingual semantics, latency |
-| Bi-encoder retrieval | Recall@100, tốc độ encode/index, dung lượng |
-| Cross-encoder reranker | Top 1/5, khả năng loại partial match, VRAM |
-| VQA answerer | evidence grounding, format/language, hallucination |
-| OCR/ASR | độ phủ text/speech, timestamp, throughput offline |
+- model xử lý evidence gì: frame, window, text, audio hay cross-modal pair;
+- input/output và dimension;
+- artifact, model version và license;
+- VRAM/RAM/disk/ETA;
+- subset benchmark và ground truth;
+- metric/cutoff cần cải thiện;
+- failure fallback và rollback.
 
-Trước khi thay model, AI phải trả lời:
+Không chấp nhận câu “dùng model X sẽ tốt hơn” nếu chưa chỉ ra model nằm ở tầng
+nào và thay thế/bổ sung artifact nào.
 
-- model có đúng modality/language không;
-- checkpoint/license có dùng được cho cuộc thi không;
-- có vừa VRAM/RAM/disk không;
-- cần re-index bao nhiêu dữ liệu;
-- online latency và offline build time;
-- fallback nếu download/load/inference lỗi;
-- cách đo cải thiện trên dev set.
+## 4. Offline indexing đúng hướng
 
-Model-first không có nghĩa dùng LLM cho mọi thao tác. Mapping frame, validation,
-checkpoint và budget vẫn nên deterministic.
+AI phải xem video là kho nhiều evidence:
 
-## 4. Cách xử lý query đúng hướng
-
-Một query dài phải được biểu diễn thành structured evidence:
-
-- scene/moment;
-- entity và action;
-- attribute/count/relation;
-- visible text;
-- temporal order;
-- global conditions;
-- alternative retrieval captions;
-- missing-evidence repair captions.
-
-Model planner sinh cấu trúc tổng quát. Không thêm danh sách `if query contains red
-car`, tên địa danh hoặc lỗi OCR riêng của một sample. Nếu planner sai, sửa schema,
-prompt, validation hoặc training/evaluation data.
-
-## 5. Retrieval trước, rerank sau
-
-Khi kết quả chỉ khớp một phần, AI phải tách hai khả năng:
-
-1. **Recall failure**: video đúng không có trong candidate pool. Cần planner,
-   retriever, OCR/ASR/side index hoặc candidate budget tốt hơn.
-2. **Ranking failure**: video đúng có trong pool nhưng đứng thấp. Cần evidence
-   aggregation, cross-encoder, calibration hoặc cutoff ranking.
-
-Không thể sửa recall failure chỉ bằng rerank. Mọi thử nghiệm nên log video đúng có
-ở Top 100/400/800 trước rerank hay không.
-
-## 6. Evaluation contract
-
-Không dùng cảm giác nhìn vài ảnh để kết luận model tốt hơn. Dev set cần có:
-
-- query VI/EN ngắn và dài;
-- single-scene/multi-scene;
-- actions, colors, counts, relations, OCR;
-- hard negatives chỉ khớp object chung;
-- QA temporal/count/entity;
-- TRAKE ordered boundaries.
-
-Báo cáo tối thiểu:
-
-- Recall@1/5/20/50/100 và MRR;
-- candidate recall trước rerank;
-- QA normalized answer accuracy;
-- TRAKE video accuracy, moment recall và frame error;
-- P50/P95 latency, peak VRAM/RAM;
-- ablation từng retriever/verifier.
-
-Nếu chưa có ground truth, chỉ được báo “smoke/contract passed”, không báo accuracy.
-
-## 7. Quy trình sửa code cùng AI
-
-1. Yêu cầu AI kiểm tra `git status`; working tree bẩn không được reset.
-2. Giới hạn file/phạm vi rõ ràng.
-3. Đề nghị AI nêu assumption có thể ảnh hưởng kiến trúc.
-4. Dùng feature flag hoặc complete-state guard cho model/index mới.
-5. Chạy compile và toàn bộ unittest.
-6. Chạy smoke nhỏ trước full GPU job.
-7. Với builder, benchmark throughput rồi mới ước lượng full run.
-8. Cập nhật tài liệu và runtime report.
-9. Con người xem `git diff` trước commit/push.
-
-## 8. Checklist review output của AI
-
-- Có phân biệt việc đã làm, chưa làm và chưa kiểm chứng không?
-- Có nói đúng model backend thực tế hay chỉ đọc tên trong config?
-- Có vô tình dùng partial index không?
-- Có giữ đủ Top 100 và đúng `frame_id` không?
-- Có tạo network download giữa request không?
-- Có chạy hai model 2B/OCR cùng GPU không?
-- Có hard-code sample query không?
-- Có số liệu latency/VRAM và test result không?
-- Có cập nhật docs không?
-
-## 9. Handoff giữa các phiên AI
-
-Cuối một task dài, yêu cầu tạo hoặc cập nhật runtime report gồm:
-
-- objective và quyết định kiến trúc;
-- file đã đổi;
-- dependency/model đã cài;
-- test/smoke và số đo;
-- process đang chạy;
-- artifact/checkpoint complete hay partial;
-- blocker và lệnh tiếp tục chính xác;
-- `git status`, chưa commit hay đã commit/push.
-
-Không dựa vào lịch sử chat như nguồn duy nhất; thành viên khác phải tiếp tục được
-chỉ từ repository và artifact manifest.
-
-## 10. Các thao tác Git an toàn
-
-AI có thể sửa/test local khi được yêu cầu. Commit hoặc push cần nằm trong yêu cầu
-rõ ràng của thành viên vì repository có thể chứa nhiều thay đổi chưa review.
-
-Trước push:
-
-```powershell
-git status
-git diff --check
-git diff --stat
-git diff --cached
+```text
+manifest + frame map + shot
+  + frame embeddings
+  + video-window embeddings
+  + structured captions
+  + OCR/object
+  + ASR timestamped sau này
 ```
 
-Không commit data/model/token. Không dùng `git reset --hard` để “dọn” working tree.
+Không để AI chỉ tối ưu OCR rồi coi như hiểu video. Không tạo một average vector
+cho toàn video. Mọi evidence phải có `video_id`, timestamp, source frame/window và
+signature.
 
+Khi thêm builder mới, yêu cầu:
+
+- CLI `--limit`, `--checkpoint-every` và resume;
+- state `complete=false` trong lúc build;
+- publish atomic;
+- idempotent hoặc signature mismatch rõ ràng;
+- test dừng ngang/resume;
+- index partial fail closed ở runtime.
+
+## 5. Query processing đúng hướng
+
+Planner model sinh JSON có giới hạn:
+
+- scenes và retrieval captions;
+- must-have entities/actions/attributes/relations;
+- visible text hoặc speech evidence cần thiết;
+- temporal edges;
+- repair queries.
+
+Parser chỉ validate schema và fallback. Cấm thêm bảng điều kiện cho một màu,
+object, câu tiếng Việt hoặc query năm trước.
+
+KIS/QA/TRAKE phải dùng cùng `UnifiedQueryPlan`. Không tạo parser/translator semantic
+riêng cho từng pipeline; endpoint chỉ cung cấp `task_type` cho model.
+
+## 6. Retrieval và rerank
+
+Agent phải kiểm tra recall trước rerank. Reranker không cứu được video chưa vào
+candidate pool.
+
+Luồng chuẩn:
+
+1. retrieve frame/window từ từng embedding space;
+2. hiệu chuẩn rank trong từng retriever;
+3. hợp nhất candidate và gom video hypothesis;
+4. tính scene coverage/temporal consistency;
+5. model rerank/verification;
+6. bounded repair;
+7. cutoff-aware Top 100.
+
+Không cộng raw cosine CLIP + SigLIP + Qwen. Không tuyên bố 100 row đều đúng; lưu
+`model_relevance_score`, `model_verified` và provenance.
+
+## 7. QA và TRAKE
+
+Với QA, AI phải chứng minh retrieval đúng video/window trước khi sửa answer prompt.
+OCR/object/caption là evidence, không tự sinh answer. Answer verifier phải kiểm tra
+grounding và format.
+
+Với TRAKE, ưu tiên đúng video theo coverage của mọi moment, sau đó monotonic
+alignment theo timestamp và sequence verification. Không rerank từng frame độc lập
+rồi ghép tùy ý.
+
+## 8. Evaluation contract
+
+Smoke test chỉ chứng minh hệ thống chạy. Thay retrieval/model cần:
+
+- labeled dev set có video + frame/window ground truth;
+- Recall@1/5/20/50/100 và official mean;
+- đúng video trước và sau rerank;
+- candidate/verified/distinct-video count;
+- latency P50/P95, peak VRAM và disk/index size;
+- ablation theo từng tầng;
+- regression cho tiếng Việt, multi-scene, temporal, OCR và hard negative.
+
+## 9. Review output của AI
+
+Trước khi chấp nhận thay đổi, kiểm tra:
+
+- Active/partial/planned có được phân biệt không?
+- Code có đúng với command và model trong docs không?
+- Có dùng `frame_id` thật không?
+- Index dở có bị bỏ qua không?
+- Có model download trong request không?
+- Có rule patch query mẫu không?
+- Có giữ fallback và rollback không?
+- Compile và toàn bộ test có pass không?
+- Tài liệu chuẩn có được cập nhật không?
+
+## 10. Handoff
+
+Mỗi phiên làm việc phải cập nhật `docs/CURRENT_STATUS.md` khi trạng thái artifact,
+model hoặc runtime thay đổi. Ghi:
+
+- commit/working tree liên quan;
+- artifact state và signature;
+- command cuối đã chạy;
+- số lượng progress;
+- test/metric/latency/VRAM;
+- blocker và bước tiếp theo.
+
+Không tạo thêm checkpoint dài theo ngày nếu thông tin thuộc status/roadmap chuẩn;
+cập nhật file canonical để thành viên khác không phải chọn giữa nhiều kế hoạch.
+
+## 11. Git an toàn
+
+- Đọc `git status` trước khi sửa.
+- Không reset hoặc ghi đè user changes.
+- Không stage `data/`, model cache, `.venv`, query, submission hoặc secret.
+- Chạy `git diff --check`, compile và unit test trước commit.
+- Không push nếu user chỉ yêu cầu review/phân tích.

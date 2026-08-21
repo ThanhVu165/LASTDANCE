@@ -1,107 +1,93 @@
-# AGENTS.md — LASTDANCE repository guide
+# AGENTS.md — LASTDANCE repository contract
 
-This file applies to the entire repository. Human contributors and coding agents
-must treat it as the default operating contract.
+File này áp dụng cho toàn repository và là contract mặc định cho người và coding
+agent.
 
-## Read first
-
-Read these documents in order before changing retrieval behavior:
+## Đọc trước khi sửa
 
 1. `docs/PROJECT_CONTEXT.md`
-2. `docs/TEAM_SETUP.md`
-3. `docs/AI_COLLABORATION_GUIDE.md`
-4. `README.md`
-5. `docs/model_first_runtime_report_2026-08-21.md` for the latest measured state
+2. `docs/SYSTEM_ARCHITECTURE.md`
+3. `docs/QUERY_PROCESSING.md` nếu đụng query/KIS/QA/TRAKE
+4. `docs/OFFLINE_INDEXING.md` nếu đụng dữ liệu/index/model offline
+5. `docs/MODEL_SELECTION.md` nếu đề xuất/thay model
+6. `docs/CURRENT_STATUS.md`
+7. `docs/DEVELOPMENT_ROADMAP.md`
+8. `docs/TEAM_SETUP.md` nếu thay dependency/lệnh/model artifact
 
-Historical plans and checkpoints are context, not current runtime instructions.
+Báo cáo E2E có ngày là evidence snapshot. PDF là nguồn thể lệ. Không dùng lịch sử
+chat hoặc file đã bị loại bỏ làm runtime instruction.
 
-## Product objective
+## Mục tiêu sản phẩm
 
-LASTDANCE is an AIC2026 video retrieval system for KIS, QA and TRAKE. Optimize
-the official ranking cutoffs `R@1, R@5, R@20, R@50, R@100`, with this priority:
+LASTDANCE là hệ thống video retrieval cho KIS, QA và TRAKE. Tối ưu các cutoff
+`R@1, R@5, R@20, R@50, R@100` theo thứ tự:
 
-1. retrieve the correct video/window;
-2. rank the strongest evidence first;
-3. answer QA or refine TRAKE frames only after retrieval is credible.
+1. tìm đúng video và time window;
+2. phủ đủ scene/điều kiện của query;
+3. rerank bằng evidence nhìn thấy được;
+4. chỉ sau đó mới refine frame, trả lời QA hoặc align TRAKE.
 
-## Hard invariants
+## Kiến trúc bắt buộc
 
-- Public query endpoints accept one natural-language `text` field and return at
-  most 100 ranked rows. The competition path requests exactly 100 when enough
-  candidates exist.
-- `local_idx` is an internal keyframe number. `frame_id` is the real source-video
-  frame from `data/map-keyframes`; submissions must use `frame_id`.
-- Never treat one keyframe vector as a representation of a complete video.
-- Semantic understanding is model-first. Qwen structured planning and multimodal
-  verification are primary; regex/heuristics are bounded fallbacks, not a place
-  for query-specific patches.
-- A model score is evidence, not ground truth. Do not claim accuracy without a
-  labeled dev set on the current dataset.
-- Missing or incomplete optional indexes must fail closed and preserve the
-  organizer CLIP production path.
-- Do not commit `data/`, model caches, `.venv`, query files, submissions, logs or
-  credentials.
+- Không biểu diễn toàn video bằng một vector hoặc một keyframe.
+- Video là tập window/evidence có timestamp và provenance.
+- `Qwen3-VL-Embedding-2B` là hướng video-window recall chính; organizer CLIP là
+  baseline/fallback cho tới khi window index complete và thắng A/B.
+- Một Qwen `UnifiedQueryPlan` là đường hiểu semantic chung cho KIS/QA/TRAKE.
+- Dedicated Qwen reranker là đích query–video/window scoring; generative verifier
+  là fallback model hiện tại.
+- OCR, object, caption, shot và ASR là evidence bổ sung, không phải query parser
+  hoặc answer generator độc lập.
+- Regex/heuristic chỉ dùng cho schema, ID mapping và resource bound. Fallback
+  semantic là nguyên query, không tự suy scene/question/moment bằng rule.
+- Không thêm patch riêng cho query mẫu, ngôn ngữ, màu hoặc object.
 
-## Current production path
+## Data và index invariants
 
-- Query planning and generative verification: `Qwen/Qwen3-VL-2B-Instruct`.
-- Dedicated target reranker: `Qwen/Qwen3-VL-Reranker-2B`; use only when its full
-  local checkpoint exists. Runtime must not download multi-GB models.
-- Primary recall: organizer `clip-ViT-B-32` image features plus the compatible
-  multilingual text tower.
-- KIS: structured plan → multi-prompt recall → fusion/storyboard → model
-  verification → repair retrieval → cutoff ranking → exact-frame refinement.
-- QA reuses KIS verified retrieval, then performs temporal VQA.
-- TRAKE remains temporal moment retrieval/alignment plus visual and exact-frame
-  refinement; migrating it to the shared verified layer is backlog.
-- SigLIP2 and Qwen video-window indexes are optional. A state file with
-  `complete=false` is not production-ready and must be ignored.
+- `local_idx` là keyframe nội bộ; `frame_id` là frame thật dùng cho submission.
+- `pts_time` là trục join giữa window, OCR, caption, object và ASR.
+- Mọi artifact có model/config/dataset signature.
+- State `complete=false` phải fail closed; file feature/index tồn tại chưa đủ.
+- Không cộng raw cosine từ các embedding space khác nhau; dùng rank calibration.
+- Không xóa `data/`, OCR state, production index hoặc model cache như cleanup.
+- Không commit dataset, cache, `.venv`, query, submission, log hoặc credential.
 
-## GPU safety
+## Model và GPU
 
-The reference machine is an RTX 4050 Laptop GPU with 6 GiB VRAM. Do not run any
-two of the following concurrently:
+Máy tham chiếu là RTX 4050 Laptop 6 GiB. Không chạy đồng thời backend Qwen, OCR,
+SigLIP builder hoặc Qwen embedding/reranker build. Các model 2B phải load/release
+theo phase. Runtime không tự tải model nhiều GB và không âm thầm chuyển CUDA sang
+CPU.
 
-- FastAPI after Qwen has loaded;
-- OCR indexing;
-- SigLIP2 indexing;
-- Qwen embedding/reranker builds or smoke tests.
+## Workflow thay đổi
 
-Release one model before loading another. Keep model downloads separate from
-runtime requests. Never silently switch a CUDA workload to CPU; report it.
-
-## Change workflow
-
-1. Inspect the relevant pipeline, configuration and tests before editing.
-2. Preserve user changes and generated data.
-3. Put new behavior behind configuration or an unavailable-index check until it
-   passes smoke/E2E evaluation.
-4. Run from `backend/`:
+1. Đọc pipeline, config, tests và status liên quan.
+2. Nếu thay retrieval/index, tạo baseline/dev subset trước.
+3. Giữ behavior mới sau feature/index completeness gate.
+4. Builder phải checkpoint/resume và publish atomic.
+5. Chạy từ `backend/`:
 
    ```powershell
    .\.venv\Scripts\python.exe -m compileall -q app
    .\.venv\Scripts\python.exe -m unittest discover -s tests -q
    ```
 
-5. For ranking changes, report result count, verified/scored count, distinct
-   videos, latency and peak VRAM. Report Recall@k only when ground truth exists.
-6. Update `README.md` and the relevant document in `docs/` when architecture,
-   models, defaults, commands or runtime status change.
+6. Với ranking/model/index, báo Recall@k khi có ground truth, result/verified
+   count, distinct video, latency P50/P95, peak VRAM và rollback.
+7. Cập nhật `CURRENT_STATUS.md`, kiến trúc, indexing, roadmap và setup nếu contract,
+   model, artifact hoặc command thay đổi.
 
-## Do not do
+## Không được làm
 
-- Do not add hard-coded fixes for colors, objects, Vietnamese phrases or known
-  sample queries.
-- Do not mix raw cosine scores from unrelated embedding spaces without rank or
-  score calibration.
-- Do not publish a partial FAISS index or mark a checkpoint complete early.
-- Do not delete OCR state, production indexes, datasets or model caches as
-  “cleanup”. Prove code is dead with repository search before removing it.
-- Do not use `git reset --hard` or overwrite a dirty working tree.
+- Không publish partial FAISS index hoặc sửa state complete thủ công.
+- Không mix score không hiệu chuẩn.
+- Không cho answer model chạy trước khi retrieval chọn được evidence credible.
+- Không tuyên bố Top 100 đều đúng hoặc model tốt hơn chỉ từ smoke test.
+- Không bỏ CLIP/tournament fallback trước khi replacement qua regression test.
+- Không dùng `git reset --hard` hoặc ghi đè dirty worktree.
 
 ## Definition of done
 
-A retrieval change is done only when code compiles, all tests pass, the API still
-returns the required schema/count, GPU/latency measurements are recorded, failure
-fallbacks are verified, and documentation reflects the actual active model/index.
-
+Một thay đổi retrieval hoàn tất khi code compile, test pass, API giữ schema/count,
+index/failure fallback được kiểm tra, mapping frame đúng, đo latency/VRAM, có A/B
+trên ground truth nếu thay ranking, và tài liệu phản ánh đúng active/partial/planned.

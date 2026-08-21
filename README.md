@@ -1,285 +1,174 @@
-# AIC2026 Retrieval System — Vòng sơ tuyển
+# LASTDANCE — AIC2026 video retrieval
 
-## Bắt đầu từ đây
+LASTDANCE nhận một câu truy vấn tự nhiên và trả Top 100 kết quả cho KIS, QA hoặc
+TRAKE. Hướng phát triển hiện tại là **video-window retrieval + model-based
+planning/reranking/verification**. OCR, object, caption và sau này ASR là các
+kênh evidence bổ sung; không kênh nào thay thế việc hiểu toàn bộ video scene.
 
-Tài liệu hiện hành cho thành viên và AI:
+## Tài liệu chuẩn
 
-- [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md): bối cảnh cuộc thi, dữ liệu,
-  metric, kiến trúc model-first và trạng thái từng model.
-- [`docs/TEAM_SETUP.md`](docs/TEAM_SETUP.md): clone, dataset/model transfer, dựng
-  máy Windows khác, test, vận hành và Git push.
-- [`docs/AI_COLLABORATION_GUIDE.md`](docs/AI_COLLABORATION_GUIDE.md): cách giao task
-  cho AI, chọn model, đánh giá và handoff.
-- [`AGENTS.md`](AGENTS.md): contract bắt buộc cho coding agent trong repository.
-- [`docs/model_first_runtime_report_2026-08-21.md`](docs/model_first_runtime_report_2026-08-21.md):
-  số đo và artifact gần nhất.
+Đọc theo thứ tự:
 
-Các plan/checkpoint cũ trong `docs/` chỉ dùng để tra lịch sử quyết định. Khi nội
-dung xung đột, ưu tiên `AGENTS.md`, `PROJECT_CONTEXT.md`, `TEAM_SETUP.md`, code và
-`/health` hiện tại.
+1. [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md) — bài toán và quyết định sản phẩm.
+2. [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md) — pipeline và vai trò model.
+3. [`docs/QUERY_PROCESSING.md`](docs/QUERY_PROCESSING.md) — một model-based query plan cho KIS/QA/TRAKE.
+4. [`docs/OFFLINE_INDEXING.md`](docs/OFFLINE_INDEXING.md) — cách biến video thành evidence/index.
+5. [`docs/MODEL_SELECTION.md`](docs/MODEL_SELECTION.md) — quyết định và challenger cho từng model.
+6. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) — phần đang hoạt động và đang dở.
+7. [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md) — thứ tự phát triển và acceptance gate.
+8. [`docs/TEAM_SETUP.md`](docs/TEAM_SETUP.md) — dựng trên máy khác.
+9. [`docs/AI_COLLABORATION_GUIDE.md`](docs/AI_COLLABORATION_GUIDE.md) — quy tắc làm việc với AI.
 
-Hệ thống truy xuất video hỗ trợ cả 3 dạng truy vấn của vòng sơ tuyển AIC2026:
-**Textual KIS**, **Q&A**, **TRAKE**. Backend FastAPI + module re-rank riêng, frontend
-Streamlit để tra cứu và xuất bài nộp đúng chuẩn hệ thống thi
-(https://sotuyenaic.oj.io.vn/).
+[`docs/Thong tin vong So tuyen AIC2026.pdf`](docs/Thong%20tin%20vong%20So%20tuyen%20AIC2026.pdf)
+là nguồn thể lệ. Báo cáo E2E có ngày là bằng chứng kiểm thử tại một checkpoint,
+không phải hướng dẫn runtime.
 
-## 1) Cấu trúc dữ liệu thực tế (đã xác nhận từ dataset đã tải)
+## Kiến trúc ngắn gọn
 
+```text
+query
+  → unified Qwen structured planner cho KIS/QA/TRAKE
+  → frame recall + video-window recall + indexed evidence
+  → video/scene coverage và temporal aggregation
+  → Qwen multimodal reranker/verifier
+  → bounded repair retrieval
+  → Top 100 + exact source-frame refinement
 ```
+
+Không dùng một vector để đại diện toàn video. Offline pipeline giữ một tập vector
+window cùng timestamp, frame mapping, shot, OCR, object và structured caption.
+Chi tiết: [`docs/OFFLINE_INDEXING.md`](docs/OFFLINE_INDEXING.md).
+
+## Model theo vai trò
+
+| Vai trò | Model | Trạng thái |
+|---|---|---|
+| Baseline frame recall | organizer `clip-ViT-B-32` | Production |
+| Vietnamese CLIP query | `clip-ViT-B-32-multilingual-v1` | Production |
+| Unified planner, verifier, VQA, offline caption | `Qwen/Qwen3-VL-2B-Instruct` | KIS planner/verifier/VQA active; unified QA/TRAKE plan và caption là roadmap |
+| Video-window embedding | `Qwen/Qwen3-VL-Embedding-2B` | Builder có, index partial |
+| Dedicated query–video rerank | `Qwen/Qwen3-VL-Reranker-2B` | Adapter có, checkpoint chưa active |
+| Optional frame recall | `google/siglip2-base-patch16-256` | Chưa build full index |
+| OCR | EasyOCR CRAFT + `latin_g2` | Builder hoạt động, chưa xác nhận full collection |
+| OCR challenger | PP-OCRv5 Latin; PP-OCRv6 sau dictionary/runtime validation | Benchmark riêng, chưa thay baseline |
+| ASR | Chưa khóa model | Sau KIS/QA |
+
+Tên model trong config không có nghĩa model đang active. Kiểm tra `/health`, file
+state và [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md). Lý do chọn model nằm
+trong [`docs/MODEL_SELECTION.md`](docs/MODEL_SELECTION.md).
+
+## Dữ liệu
+
+```text
 data/
   videos/<video_id>.mp4
-  keyframes/<video_id>/<NNN>.jpg        # đánh số cục bộ 001, 002, ... (local_idx)
-  objects/<video_id>/<NNN>.json         # Faster R-CNN / OpenImages, cùng đánh số local_idx
-  features/<video_id>.npy               # shape (K, 512) float16 — mỗi video 1 file riêng
-  map-keyframes/<video_id>.csv          # cột: n, pts_time, fps, frame_idx
-                                         #   n = local_idx; frame_idx = SỐ FRAME THẬT
-                                         #   → đây là giá trị BẮT BUỘC dùng khi nộp bài
-  metadata/<video_id>.json               # metadata YouTube (có thể thiếu ở 1 số video)
-  index/                                  # sinh ra bởi bước build index bên dưới
+  keyframes/<video_id>/<NNN>.jpg
+  objects/<video_id>/<NNN>.json
+  features/<video_id>.npy
+  map-keyframes/<video_id>.csv
+  metadata/<video_id>.json
+  index/
 ```
 
-⚠️ **Lưu ý quan trọng**: mỗi keyframe có 2 chỉ số khác nhau:
-- `local_idx`: số thứ tự file jpg/json (dùng nội bộ để lấy ảnh/object/OCR).
-- `frame_id`: số frame thật trong video, lấy từ cột `frame_idx` — **đây là giá trị
-  phải xuất ra file CSV nộp bài**, không phải `local_idx`.
+`local_idx` là số keyframe nội bộ. `frame_id` là frame thật trong MP4 và là giá
+trị dùng cho preview chính xác/nộp bài. Không được hoán đổi hai trường này.
 
-## 2) Cài đặt
+## Cài đặt nhanh trên Windows
 
-### Backend
 ```powershell
-cd backend
+cd C:\LASTDANCE\backend
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-
-# PyTorch CUDA 13.0 cho RTX 4050/driver hiện tại
-.\.venv\Scripts\python.exe -m pip install torch==2.12.1 torchvision==0.27.1 `
+.\.venv\Scripts\python.exe -m pip install `
+  torch==2.12.1 torchvision==0.27.1 `
   --index-url https://download.pytorch.org/whl/cu130
-
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip check
 ```
 
-OCR dùng **EasyOCR CRAFT + `latin_g2`** trên `cuda:0`. `latin_g2` có đầy đủ ký tự
-tiếng Việt dựng sẵn; script kiểm tra toàn bộ bảng chữ cái khi khởi tạo và từ chối
-ghi cache nếu model không đáp ứng. Trọng số CRAFT/`latin_g2` được tải vào
-`data/models/easyocr/` ở lần chạy đầu. Pipeline chỉ dùng PyTorch nên tránh xung
-đột DLL CUDA/cuDNN giữa Paddle và PyTorch trên Windows.
+Không cài VietOCR vào environment production vì pin Pillow xung đột. Hướng dẫn
+đầy đủ và cách xử lý Git ownership nằm trong [`docs/TEAM_SETUP.md`](docs/TEAM_SETUP.md).
 
-Hai model runtime được tự tải từ Hugging Face ở truy vấn đầu tiên:
+## Build index
 
-- `sentence-transformers/clip-ViT-B-32-multilingual-v1` (~539 MB) cho truy vấn
-  tiếng Việt. Text embedding 512 chiều của model này được distill vào đúng không
-  gian ảnh của CLIP ViT-B/32, nên dùng trực tiếp index ảnh sẵn có, không phải
-  trích xuất lại 177.321 feature.
-- `Qwen/Qwen3-VL-2B-Instruct` (~4–5 GB cache) cho Q&A thị giác tổng quát.
-
-Không chạy OCR và Q&A cùng lúc trên GPU 6 GB. Hãy hoàn tất/dừng tiến trình
-`ocr_index` trước khi dùng trang Q&A. Backend giữ Qwen3-VL trong VRAM sau lần hỏi
-đầu để các câu tiếp theo nhanh hơn; muốn chạy OCR trở lại thì dừng backend trước.
-
-### Cấu hình model-first đang hoạt động (21/08/2026)
-
-- `Qwen/Qwen3-VL-2B-Instruct` hiểu truy vấn thành JSON scene/constraint, sinh
-  repair query và kiểm chứng theo nhóm 40 video. Regex parser chỉ còn là fallback.
-- KIS chỉ lấy pool đã được model chấm khi pool đó đủ 100 dòng; API công bố
-  `model_relevance_score` và `model_verified` trên từng kết quả.
-- `Qwen/Qwen3-VL-Reranker-2B` là backend chuyên dụng đích nhưng runtime chỉ đọc
-  local cache. Khi trọng số chưa tải đủ, hệ thống dùng generative verifier nói
-  trên; tournament cũ chỉ là fallback cuối nếu model inference lỗi.
-- Smoke API thật: KIS trả 100/100 kết quả đã chấm trong 94,9 giây ở request đầu;
-  QA trả 100 kết quả trong 82,6 giây ở lần đo tiếp theo trên RTX 4050 6 GB.
-
-### Vì sao chọn các model này
-
-- PP-OCRv6 medium đã chạy được GPU nhưng model recognition phát hành hiện tại
-  không thể phát ra đầy đủ 88 ký tự tiếng Việt dựng sẵn (xem
-  [PaddleOCR issue #18254](https://github.com/PaddlePaddle/PaddleOCR/issues/18254)).
-  Đây là lỗi vocabulary/model, không thể giải quyết triệt để bằng thay ký tự sau OCR.
-- `latin_g2` khai báo đầy đủ nhóm ký tự tiếng Việt trong
-  [cấu hình chính thức của EasyOCR](https://github.com/JaidedAI/EasyOCR/blob/master/easyocr/config.py).
-  Trên bộ chẩn đoán 3 keyframe thật, điểm giữ nguyên dấu đạt **0,9441**, so với
-  **0,8724** của PP-OCRv6 medium. CRAFT + `latin_g2` cũng chạy ổn định trên RTX
-  4050 6 GB với batch 8.
-- HunyuanOCR 1.5 (1B) là ứng viên fallback cho một tập nhỏ ảnh khó; trọng số BF16
-  khoảng 2,24 GB có thể nạp trên GPU này, nhưng
-  [benchmark chính thức](https://github.com/Tencent-Hunyuan/HunyuanOCR/blob/main/docs/benchmark.md)
-  công bố độ trễ khoảng 3,03 giây/ảnh ở chế độ cơ bản ngay trên H20. Vì vậy không
-  dùng model VLM này để index toàn bộ 177.321 keyframe.
-- Truy vấn tiếng Việt không còn được dịch bằng từ điển nhỏ rồi ghép thành câu lai
-  Việt/Anh. Model
-  [`clip-ViT-B-32-multilingual-v1`](https://huggingface.co/sentence-transformers/clip-ViT-B-32-multilingual-v1)
-  hỗ trợ hơn 50 ngôn ngữ, có tiếng Việt, và tương thích trực tiếp với feature ảnh
-  CLIP ViT-B/32 hiện có. Trên index thật, cả `a red car` và `một chiếc ô tô màu đỏ`
-  đều trả đủ 100 kết quả trong khoảng 4 giây sau khi model đã có trong cache; hai
-  hạng đầu của truy vấn tiếng Việt là khung hình xe đỏ thật.
-- [`Qwen3-VL-2B-Instruct`](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct)
-  là VLM 2B thế hệ mới có nâng cấp nhận dạng ảnh, hiểu văn bản và liên kết
-  ảnh–ngôn ngữ. Đo trực tiếp FP16 trên RTX 4050 6 GB: ba câu hỏi màu trên keyframe
-  thật đều đúng bằng tiếng Việt (`đỏ`, `xám`, `đỏ`), VRAM reserved cực đại khoảng
-  4,14 GiB; sau khi model đã nạp, mỗi ảnh thử mất khoảng 0,36–0,49 giây. Đây là
-  model cho bước đọc ảnh/trả lời của Q&A, không thay thế retrieval CLIP.
-
-### Frontend
-```powershell
-cd frontend
-python -m pip install -r requirements.txt
-```
-
-## 3) Build index (chạy 1 lần sau khi có dữ liệu trong `data/`)
+Base index bắt buộc:
 
 ```powershell
-cd backend
+cd C:\LASTDANCE\backend
 $env:PYTHONPATH = "C:\LASTDANCE\backend"
 .\.venv\Scripts\python.exe -m app.indexing.build_index
-
-# Bắt buộc smoke-test trước; kiểm tra GPU, model và output trên 20 ảnh
-.\.venv\Scripts\python.exe -m app.indexing.ocr_index --limit 20 --checkpoint-every 5
-
-# Smoke-test phân bố rộng (100 ảnh rải đều trong toàn bộ collection)
-.\.venv\Scripts\python.exe -m app.indexing.ocr_index `
-  --sample-stride 1700 --limit 100 --checkpoint-every 20
-
-# Chạy lại bộ benchmark giữ nguyên dấu trên các keyframe đã gán nhãn
-.\.venv\Scripts\python.exe -m app.indexing.ocr_model_benchmark
-
-# Sau khi kết quả smoke-test hợp lý, chạy toàn bộ phần còn thiếu
-.\.venv\Scripts\python.exe -m app.indexing.ocr_index
-
-# Side index SigLIP2 (model đã có cache; có thể dừng và resume từ state)
-.\.venv\Scripts\python.exe -m app.indexing.siglip_index `
-  --batch-size 8 --checkpoint-every 200
-
-# Chỉ chạy sau khi tải đủ Qwen3-VL-Embedding-2B
-.\.venv\Scripts\python.exe -m app.indexing.video_window_index `
-  --batch-size 1 --checkpoint-every 50
 ```
 
-`build_index.py` sinh:
-- `data/index/keyframe_index.json` — ánh xạ global_idx ↔ (video_id, local_idx, frame_id, path)
-- `data/index/clip.faiss` — FAISS index (cosine similarity) trên toàn bộ CLIP feature
-- `data/index/objects_cache.json` — nhãn object theo từng keyframe
-
-`ocr_index.py` sinh:
-- `data/index/ocr_cache.json` — schema v2: text theo từng dòng, confidence và tọa
-  độ polygon; search vẫn đọc được cache chuỗi cũ trong giai đoạn chuyển đổi.
-- `data/index/ocr_state.json` — phân biệt `success`, `no_text`, `error`, lưu số lần
-  thử và chữ ký model. Cache rỗng cũ không có state sẽ tự được OCR lại.
-
-Mặc định script đưa 8 ảnh/lần vào detector và recognition batch size là 16, phù
-hợp RTX 4050 6 GB. Nếu gặp OOM, batch lỗi tự được chia đôi đến khi chạy được; có thể chủ
-động đặt `$env:AIC_OCR_INPUT_BATCH_SIZE = "4"`. Khi đổi model/ngưỡng, chữ ký cache
-thay đổi và script tự rebuild các entry liên quan. Lỗi inference được retry tối đa
-3 lần; dùng `--retry-failed` để thử lại các entry đã vượt giới hạn.
-
-Đo thực tế trên máy RTX 4050 6 GB: mẫu tuần tự nhiều chữ đạt 2,13 ảnh/giây, mẫu
-100 ảnh rải đều collection đạt 3,67 ảnh/giây, không có lỗi. Thời gian toàn bộ ước
-tính khoảng 13–24 giờ tùy mật độ chữ; tiến trình có thể dừng và chạy tiếp từ state.
-
-## 4) Chạy hệ thống
+Video-window index — hiện là builder đang phát triển, chạy subset trước:
 
 ```powershell
-# Terminal 1 — backend
-cd backend
+.\.venv\Scripts\python.exe -m app.indexing.video_window_index `
+  --limit 100 --batch-size 1 --checkpoint-every 25
+```
+
+Chỉ bỏ `--limit` sau khi subset có ground truth chứng minh lợi ích. Index chỉ được
+dùng khi `video_window_state.json` có `complete=true`. Không chạy builder GPU cùng
+backend/OCR/side builder trên GPU 6 GiB.
+
+OCR offline:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.indexing.ocr_index `
+  --limit 20 --checkpoint-every 5
+```
+
+OCR có checkpoint/resume; `Ctrl+C` không làm mất checkpoint đã publish. Không xóa
+cache/state để chạy lại trừ khi chủ động đổi signature và đã sao lưu artifact.
+
+## Kiểm thử
+
+```powershell
+cd C:\LASTDANCE\backend
+.\.venv\Scripts\python.exe -m compileall -q app
+.\.venv\Scripts\python.exe -m unittest discover -s tests -q
+```
+
+Smoke GPU chỉ chạy khi backend và các builder khác đã dừng.
+
+## Khởi động
+
+Backend:
+
+```powershell
+cd C:\LASTDANCE\backend
 $env:PYTHONPATH = "C:\LASTDANCE\backend"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-
-# Terminal 2 — frontend
-cd frontend
-streamlit run streamlit_app.py
+.\.venv\Scripts\python.exe -m uvicorn app.main:app `
+  --host 127.0.0.1 --port 8000
 ```
 
-Mở http://localhost:8501, chọn trang **Textual KIS / Q&A / TRAKE / Export**.
+Frontend:
 
-## 5) Kiến trúc & phần công nghệ chính
-
-- **Semantic retrieval**: giữ nguyên feature ảnh `clip-ViT-B-32`; truy vấn tiếng
-  Anh dùng text tower gốc, tiếng Việt dùng
-  `sentence-transformers/clip-ViT-B-32-multilingual-v1`. Cả hai chạy trên CPU và
-  tìm trong cùng FAISS index 512 chiều.
-- **Object filter**: đọc `detection_class_entities` + `detection_scores` từ Objects
-  JSON (Faster R-CNN/OpenImages), lọc ngưỡng confidence ≥ 0.3.
-- **OCR**: EasyOCR 1.7.2, CRAFT + `latin_g2`, chạy offline trên GPU; giữ ảnh tối đa
-  2560 px để nhận chữ nhỏ, lưu các dòng confidence ≥ 0,05 cùng polygon, có state,
-  retry và atomic
-  checkpoint. So khớp OCR dùng ranh giới từ/cụm từ và edit-similarity theo độ dài,
-  không dùng bảng sửa ký tự thủ công.
-- **Structured query planner** (`app/services/query_planner.py`): KIS dùng
-  Qwen3-VL text-only để sinh JSON có scene, caption retrieval, atomic must-have,
-  visible text, temporal edge và repair query. Parser regex cũ chỉ chạy khi model
-  bị tắt/lỗi. QA tách câu hỏi và TRAKE tách moment bằng parser chuyên biệt trước
-  khi đi qua retrieval tương ứng.
-- **KIS nhiều cảnh trong đợt 1**: mỗi evidence unit tiếng Việt được Qwen3-VL dịch
-  sang một caption tiếng Anh tương ứng trong một lần gọi; hai encoder được max-pool
-  trên cùng unit nên bản dịch không được tính thành một phiếu ngữ nghĩa mới. Truy
-  vấn nhiều cảnh lấy 800 candidate/prompt, truy vấn ngắn giữ 400.
-- **Module Re-rank** (`app/rerank/`) — trọng tâm của hệ thống:
-  - `fusion_scoring.py`: kết hợp điểm CLIP + object-match + OCR-match.
-  - `temporal_smoothing.py`: khuếch đại điểm nếu các keyframe liền kề trong cùng
-    video cũng có điểm cao.
-  - `storyboard_alignment.py`: gom nhiều keyframe/evidence unit trên cùng video và
-    kiểm tra các cạnh thời gian được nêu rõ trong truy vấn.
-  - `model_reranker.py`: ưu tiên Qwen3-VL-Reranker-2B pointwise; khi checkpoint
-    chuyên dụng chưa đủ, Qwen3-VL-2B-Instruct chấm mọi video trong pool theo nhóm
-    bốn. `visual_reranker.py` tournament chỉ còn fallback cuối.
-  - `contest_ranking.py`: portfolio tại đúng mốc 1/5/20/50/100, luôn điền đủ 100
-    dòng nếu candidate pool đủ lớn.
-- **Pipelines riêng** cho từng loại truy vấn (`app/pipelines/`):
-  - `kis_pipeline.py`: structured plan → multi-retriever recall → fusion →
-    temporal/storyboard → model verification → repair retrieval → verified Top
-    100/cutoff portfolio → exact-frame Top 1.
-  - `qa_pipeline.py`: dùng toàn bộ mô tả để retrieval 100 khung hình, sau đó
-    Qwen3-VL nhìn từng khung hình và trả lời toàn bộ truy vấn; không suy đoán answer từ số
-    lượng object/OCR.
-  - `trake_pipeline.py`: semantic retrieval cho từng khoảnh khắc đã tách, xếp hạng
-    nhiều giả thuyết video theo độ phủ toàn chuỗi, rồi K-best beam alignment đảm
-    bảo frame tăng theo thời gian và sinh top 100 tổ hợp.
-
-## 6) Export & nộp bài (khớp đúng hướng dẫn chính thức)
-
-Module `app/services/export_csv.py` sinh CSV theo đúng chuẩn:
-- Không header, UTF-8, dấu phẩy, tên video **không có đuôi `.mp4`**.
-- Q&A: tự động bọc `"..."` khi answer có dấu phẩy/ngoặc kép/xuống dòng.
-- Validator kiểm tra: tối đa 100 dòng, đúng số cột theo loại truy vấn, TRAKE đúng số
-  frame theo số event, answer ≤ 100 ký tự — giúp tránh mất lượt nộp (chỉ được 3
-  lần/gói truy vấn).
-- Trang **Export** trên UI có thể xuất từng CSV hoặc đóng gói nhiều CSV vào
-  `submission.zip` (đúng cấu trúc thư mục `submission/` bắt buộc).
-
-## 7) API chính
-
-| Method | Path | Mô tả |
-|---|---|---|
-| POST | `/search/kis` | Một trường `text`; luôn yêu cầu top 100 Textual KIS |
-| POST | `/search/qa` | Một trường `text` chứa cả mô tả và câu hỏi; top 100 |
-| POST | `/search/trake` | Một trường `text` chứa toàn bộ chuỗi; tự tách moments, top 100 |
-| GET | `/video/{video_id}/keyframe/{local_idx}` | Trả ảnh keyframe (dùng local_idx) |
-| POST | `/submission/add` | Thêm danh sách kết quả đã xếp hạng vào submission |
-| GET | `/submission/{query_id}/validate` | Kiểm tra định dạng trước khi xuất |
-| GET | `/submission/{query_id}/export` | Xuất 1 file CSV |
-| POST | `/submission/zip` | Đóng gói nhiều CSV thành `submission.zip` |
-
-Ví dụ payload cho cả ba endpoint đều có cùng hình dạng:
-
-```json
-{
-  "text": "Nguyên văn truy vấn do ban tổ chức cung cấp"
-}
+```powershell
+cd C:\LASTDANCE\frontend
+C:\LASTDANCE\backend\.venv\Scripts\python.exe -m streamlit run `
+  streamlit_app.py --server.address 127.0.0.1 --server.port 8501
 ```
 
-UI không còn thanh chọn `top_k` hay các ô nhập thủ công từng moment. Mỗi trang chỉ
-có một ô truy vấn; backend khóa giới hạn ở 100 đúng theo thể lệ vòng sơ tuyển.
+Kiểm tra `http://127.0.0.1:8000/health`. Với index partial, trường
+`video_window_index_ready=false` là đúng và hệ thống giữ CLIP fallback.
 
-## 8) Hướng phát triển tiếp theo (backlog, không chặn MVP)
+## API
 
-- Hoàn tất build/publish side index SigLIP2 và `Qwen3-VL-Embedding-2B`; model
-  embedding 2B đã tải đủ, builder/checkpoint/optional fusion đã có, nhưng full
-  index chưa được tạo vì benchmark 29.938 window vẫn cần vài giờ và KIS hiện đã
-  đạt 94,9 giây mà không cần index này.
-- Tải đủ `Qwen3-VL-Reranker-2B` để thay generative verifier; model file lớn khoảng
-  3,96 GiB và cache hiện tại chưa hoàn chỉnh.
-- Learned fusion weights (khi có tập truy vấn/đáp án mẫu).
-- ASR timestamped và OCR đầy đủ được hợp nhất như kênh evidence độc lập.
-- Relevance feedback ngay trong phiên làm việc.
-- Temporal alignment nâng cao cho TRAKE (HMM/CRF thay vì DP đơn giản).
+| Endpoint | Chức năng |
+|---|---|
+| `GET /health` | Model, CUDA, index và fallback status |
+| `POST /kis/search` | KIS Top 100 |
+| `POST /qa/search` | QA Top 100 |
+| `POST /trake/search` | TRAKE Top 100 sequence hypotheses |
+| `GET /video/{video_id}/keyframe/{local_idx}` | Keyframe nội bộ |
+| `GET /video/{video_id}/frame/{frame_id}` | Frame thật từ MP4 |
+| `/submission/*` | Validate/export CSV/ZIP |
 
-Chi tiết quyết định đợt 1/đợt 2 nằm trong `docs/retrieval_upgrade_plan.md` và
-runbook thi ở `docs/round1_contest_runbook.md`.
+## Nguyên tắc phát triển
+
+- Retrieval đúng video/window trước, rerank và answer sau.
+- Model hiểu semantic; rule chỉ giữ contract và fallback.
+- Không cộng cosine thô từ các embedding space khác nhau.
+- Không publish index dở.
+- Mọi thay đổi model/index phải có dev set, Recall@k, latency, VRAM và rollback.
+- Không commit `data/`, model cache, `.venv`, query, submission hoặc credential.

@@ -1,5 +1,9 @@
 # Báo cáo kiểm thử end-to-end KIS và Q&A — 21/08/2026
 
+> Đây là evidence snapshot tại thời điểm kiểm thử, không phải roadmap hoặc mô tả
+> runtime hiện tại. Kiến trúc chuẩn nằm trong `SYSTEM_ARCHITECTURE.md`, trạng thái
+> mới nhất nằm trong `CURRENT_STATUS.md`.
+
 ## Kết luận
 
 Hệ thống **hoạt động đúng ở mức vận hành**: frontend gọi được backend, CUDA/Qwen
@@ -73,17 +77,17 @@ Q&A hiện có hai kiểu lỗi độc lập:
 - Streamlit Q&A: nhập query, hiển thị đủ #1–#100 và answer; kết quả sai `BOGOTA`
   giống API, nên frontend không làm biến đổi payload.
 - Toàn bộ trang frontend qua `py_compile`.
-- Backend: 56/56 test qua trong 11,24 giây.
+- Backend tại checkpoint này: 56/56 test qua trong 11,24 giây. Sau cleanup dead
+  code, suite chuẩn hiện là 55 test; xem `CURRENT_STATUS.md`.
 
-## Thứ tự xử lý đề xuất
+## Ánh xạ lỗi vào kiến trúc hiện tại
 
-1. P0: sửa Q&A để xác minh video/frame trước, rồi mới suy luận answer; không cho
-   answer sao chép trực tiếp thực thể từ mô tả khi câu hỏi yêu cầu suy ra thực thể
-   khác.
-2. P0: deduplicate kết quả cuối theo `(video_id, frame_id)` và bổ sung kiểm tra này
-   ở submission validator.
-3. P0: trả 422 cho whitespace và ghi log có request id cho mọi lỗi pipeline.
-4. P0/P1: cải thiện KIS multi-scene bằng hard-negative/full-criteria verification;
-   hiện comparative tournament vẫn có thể chọn video đúng chủ đề nhưng thiếu cảnh.
-5. P1: hoàn thiện OCR index; query có chữ đặc trưng hiện không có kênh lexical để
-   khôi phục đúng video.
+1. KIS multi-scene sai vì frame recall/video hypothesis chưa phủ đủ scene: ưu tiên
+   shot-aware video-window embedding và query–window reranker.
+2. QA phải nhận verified window từ shared retrieval rồi mới answer; thêm answer
+   verification để ngăn copy thực thể không được evidence hỗ trợ.
+3. Query chứa chữ cần OCR/structured caption lexical evidence, nhưng OCR chỉ là
+   một modality trong offline evidence store.
+4. Deduplicate `(video_id, frame_id)`, whitespace 422, submission validation và
+   request logging là các lỗi contract độc lập, cần regression test riêng.
+5. Acceptance gate và thứ tự triển khai nằm trong `DEVELOPMENT_ROADMAP.md`.
