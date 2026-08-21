@@ -1,5 +1,23 @@
 # AIC2026 Retrieval System — Vòng sơ tuyển
 
+## Bắt đầu từ đây
+
+Tài liệu hiện hành cho thành viên và AI:
+
+- [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md): bối cảnh cuộc thi, dữ liệu,
+  metric, kiến trúc model-first và trạng thái từng model.
+- [`docs/TEAM_SETUP.md`](docs/TEAM_SETUP.md): clone, dataset/model transfer, dựng
+  máy Windows khác, test, vận hành và Git push.
+- [`docs/AI_COLLABORATION_GUIDE.md`](docs/AI_COLLABORATION_GUIDE.md): cách giao task
+  cho AI, chọn model, đánh giá và handoff.
+- [`AGENTS.md`](AGENTS.md): contract bắt buộc cho coding agent trong repository.
+- [`docs/model_first_runtime_report_2026-08-21.md`](docs/model_first_runtime_report_2026-08-21.md):
+  số đo và artifact gần nhất.
+
+Các plan/checkpoint cũ trong `docs/` chỉ dùng để tra lịch sử quyết định. Khi nội
+dung xung đột, ưu tiên `AGENTS.md`, `PROJECT_CONTEXT.md`, `TEAM_SETUP.md`, code và
+`/health` hiện tại.
+
 Hệ thống truy xuất video hỗ trợ cả 3 dạng truy vấn của vòng sơ tuyển AIC2026:
 **Textual KIS**, **Q&A**, **TRAKE**. Backend FastAPI + module re-rank riêng, frontend
 Streamlit để tra cứu và xuất bài nộp đúng chuẩn hệ thống thi
@@ -58,6 +76,18 @@ Không chạy OCR và Q&A cùng lúc trên GPU 6 GB. Hãy hoàn tất/dừng ti�
 `ocr_index` trước khi dùng trang Q&A. Backend giữ Qwen3-VL trong VRAM sau lần hỏi
 đầu để các câu tiếp theo nhanh hơn; muốn chạy OCR trở lại thì dừng backend trước.
 
+### Cấu hình model-first đang hoạt động (21/08/2026)
+
+- `Qwen/Qwen3-VL-2B-Instruct` hiểu truy vấn thành JSON scene/constraint, sinh
+  repair query và kiểm chứng theo nhóm 40 video. Regex parser chỉ còn là fallback.
+- KIS chỉ lấy pool đã được model chấm khi pool đó đủ 100 dòng; API công bố
+  `model_relevance_score` và `model_verified` trên từng kết quả.
+- `Qwen/Qwen3-VL-Reranker-2B` là backend chuyên dụng đích nhưng runtime chỉ đọc
+  local cache. Khi trọng số chưa tải đủ, hệ thống dùng generative verifier nói
+  trên; tournament cũ chỉ là fallback cuối nếu model inference lỗi.
+- Smoke API thật: KIS trả 100/100 kết quả đã chấm trong 94,9 giây ở request đầu;
+  QA trả 100 kết quả trong 82,6 giây ở lần đo tiếp theo trên RTX 4050 6 GB.
+
 ### Vì sao chọn các model này
 
 - PP-OCRv6 medium đã chạy được GPU nhưng model recognition phát hành hiện tại
@@ -113,6 +143,14 @@ $env:PYTHONPATH = "C:\LASTDANCE\backend"
 
 # Sau khi kết quả smoke-test hợp lý, chạy toàn bộ phần còn thiếu
 .\.venv\Scripts\python.exe -m app.indexing.ocr_index
+
+# Side index SigLIP2 (model đã có cache; có thể dừng và resume từ state)
+.\.venv\Scripts\python.exe -m app.indexing.siglip_index `
+  --batch-size 8 --checkpoint-every 200
+
+# Chỉ chạy sau khi tải đủ Qwen3-VL-Embedding-2B
+.\.venv\Scripts\python.exe -m app.indexing.video_window_index `
+  --batch-size 1 --checkpoint-every 50
 ```
 
 `build_index.py` sinh:
@@ -164,12 +202,11 @@ Mở http://localhost:8501, chọn trang **Textual KIS / Q&A / TRAKE / Export**.
   retry và atomic
   checkpoint. So khớp OCR dùng ranh giới từ/cụm từ và edit-similarity theo độ dài,
   không dùng bảng sửa ký tự thủ công.
-- **Query understanding dùng chung** (`app/services/query_processing.py`): cả KIS,
-  Q&A và TRAKE đều nhận nguyên văn một truy vấn hoàn chỉnh; tự nhận diện VI/EN,
-  tạo các visual prompt cùng ngôn ngữ, tách phần mô tả/câu hỏi của Q&A và tách
-  chuỗi khoảnh khắc có thứ tự của TRAKE. Không còn từ điển dịch chắp vá. Object và
-  OCR chỉ là bằng chứng re-rank phụ khi truy vấn thực sự chứa object hoặc yêu cầu
-  đọc chữ; semantic CLIP vẫn là tín hiệu chính.
+- **Structured query planner** (`app/services/query_planner.py`): KIS dùng
+  Qwen3-VL text-only để sinh JSON có scene, caption retrieval, atomic must-have,
+  visible text, temporal edge và repair query. Parser regex cũ chỉ chạy khi model
+  bị tắt/lỗi. QA tách câu hỏi và TRAKE tách moment bằng parser chuyên biệt trước
+  khi đi qua retrieval tương ứng.
 - **KIS nhiều cảnh trong đợt 1**: mỗi evidence unit tiếng Việt được Qwen3-VL dịch
   sang một caption tiếng Anh tương ứng trong một lần gọi; hai encoder được max-pool
   trên cùng unit nên bản dịch không được tính thành một phiếu ngữ nghĩa mới. Truy
@@ -180,14 +217,15 @@ Mở http://localhost:8501, chọn trang **Textual KIS / Q&A / TRAKE / Export**.
     video cũng có điểm cao.
   - `storyboard_alignment.py`: gom nhiều keyframe/evidence unit trên cùng video và
     kiểm tra các cạnh thời gian được nêu rõ trong truy vấn.
-  - `visual_reranker.py`: Qwen3-VL so sánh tương đối các contact sheet theo bracket
-    nhóm 3. Không dùng điểm tự chấm tuyệt đối của VLM vì model 2B không được hiệu
-    chuẩn làm relevance scorer. Query ngắn được bổ sung keyframe trước/giữa/sau.
+  - `model_reranker.py`: ưu tiên Qwen3-VL-Reranker-2B pointwise; khi checkpoint
+    chuyên dụng chưa đủ, Qwen3-VL-2B-Instruct chấm mọi video trong pool theo nhóm
+    bốn. `visual_reranker.py` tournament chỉ còn fallback cuối.
   - `contest_ranking.py`: portfolio tại đúng mốc 1/5/20/50/100, luôn điền đủ 100
     dòng nếu candidate pool đủ lớn.
 - **Pipelines riêng** cho từng loại truy vấn (`app/pipelines/`):
-  - `kis_pipeline.py`: bilingual scene recall → fusion → temporal/storyboard
-    alignment → Qwen tournament → cutoff portfolio → exact-frame Top 1.
+  - `kis_pipeline.py`: structured plan → multi-retriever recall → fusion →
+    temporal/storyboard → model verification → repair retrieval → verified Top
+    100/cutoff portfolio → exact-frame Top 1.
   - `qa_pipeline.py`: dùng toàn bộ mô tả để retrieval 100 khung hình, sau đó
     Qwen3-VL nhìn từng khung hình và trả lời toàn bộ truy vấn; không suy đoán answer từ số
     lượng object/OCR.
@@ -232,9 +270,12 @@ có một ô truy vấn; backend khóa giới hạn ở 100 đúng theo thể l�
 
 ## 8) Hướng phát triển tiếp theo (backlog, không chặn MVP)
 
-- Sau đợt 1: side index `Qwen3-VL-Embedding-2B` trên các cửa sổ video chồng lấn
-  6–10 giây và 20–40 giây; `Qwen3-VL-Reranker-2B` làm cross-encoder. Không dùng một
-  vector cho toàn video và không thay production trước khi A/B có ground truth.
+- Hoàn tất build/publish side index SigLIP2 và `Qwen3-VL-Embedding-2B`; model
+  embedding 2B đã tải đủ, builder/checkpoint/optional fusion đã có, nhưng full
+  index chưa được tạo vì benchmark 29.938 window vẫn cần vài giờ và KIS hiện đã
+  đạt 94,9 giây mà không cần index này.
+- Tải đủ `Qwen3-VL-Reranker-2B` để thay generative verifier; model file lớn khoảng
+  3,96 GiB và cache hiện tại chưa hoàn chỉnh.
 - Learned fusion weights (khi có tập truy vấn/đáp án mẫu).
 - ASR timestamped và OCR đầy đủ được hợp nhất như kênh evidence độc lập.
 - Relevance feedback ngay trong phiên làm việc.

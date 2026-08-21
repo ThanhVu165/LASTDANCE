@@ -1,0 +1,26 @@
+* text=auto
+
+# Source and documentation stay stable across Windows/Linux contributors.
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Native Windows scripts use CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary artifacts must never be line-ending normalized.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary
+*.npy binary
+*.faiss binary
+*.mp4 binary

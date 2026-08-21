@@ -1,5 +1,10 @@
 # Runbook đợt 1 — cấu hình đã khóa
 
+> **Tài liệu lịch sử.** Kiến trúc model-first hiện hành đã thay đổi một số mặc
+> định trong file này. Để vận hành trên máy hiện tại hoặc dựng máy mới, dùng
+> `docs/PROJECT_CONTEXT.md`, `docs/TEAM_SETUP.md` và
+> `docs/model_first_runtime_report_2026-08-21.md`.
+
 ## Không thay đổi trước giờ thi
 
 - Không cài thêm package, không tải Qwen3-VL-Embedding/SigLIP2 và không rebuild

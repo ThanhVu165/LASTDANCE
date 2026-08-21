@@ -276,7 +276,7 @@ LASTDANCE/
         query_processing.py
       rerank/
         fusion_scoring.py
-        diversity_mmr.py
+        contest_ranking.py
         temporal_smoothing.py
       pipelines/
         kis_pipeline.py
