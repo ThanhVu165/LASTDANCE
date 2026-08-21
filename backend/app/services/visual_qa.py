@@ -1,8 +1,8 @@
 """Lazy local visual question answering with the configured Qwen vision model."""
 from __future__ import annotations
 
-import re
 import sys
+import gc
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
@@ -10,7 +10,6 @@ from typing import Any, Sequence
 from PIL import Image
 
 from app.config import (
-    MAX_ANSWER_LENGTH,
     VQA_DEVICE,
     VQA_MAX_NEW_TOKENS,
     VQA_MAX_PIXELS,
@@ -64,15 +63,17 @@ def _load_vqa() -> tuple[Any, Any, str]:
     return model, processor, device
 
 
-def _clean_answer(text: str) -> str:
-    answer = text.strip().splitlines()[0] if text.strip() else ""
-    answer = re.sub(
-        r"^(?:answer|the answer is|trả lời|câu trả lời là)\s*[:：-]?\s*",
-        "",
-        answer,
-        flags=re.IGNORECASE,
-    ).strip(" \"'“”.")
-    return answer[:MAX_ANSWER_LENGTH] if answer else "unknown"
+def release_vqa() -> None:
+    """Release the instruction VLM before another 2B vision model uses the GPU."""
+    _load_vqa.cache_clear()
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 
 def generate_images(
@@ -161,29 +162,3 @@ def generate_text(prompt: str, *, max_new_tokens: int) -> str:
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )[0].strip()
-
-
-def answer_images(image_paths: Sequence[str | Path], question: str) -> str:
-    """Answer from one frame or a short chronological context window."""
-    existing_paths = [Path(path) for path in image_paths if Path(path).exists()]
-    if not existing_paths:
-        return "unknown"
-    context_instruction = ""
-    if len(existing_paths) > 1:
-        context_instruction = (
-            "Các khung hình được đưa theo thứ tự thời gian; khung ở giữa là ứng "
-            "viên chính. Dùng cả chuỗi để hiểu hành động, nhưng nếu câu hỏi yêu cầu "
-            "số lượng tại một thời điểm thì đếm trên khung giữa. "
-        )
-    prompt = (
-        f"{context_instruction}Quan sát kỹ rồi trả lời trực tiếp, thật ngắn gọn và không giải "
-        "thích. Bắt buộc dùng cùng ngôn ngữ với câu hỏi. Nếu câu hỏi bằng tiếng Việt, "
-        "chỉ dùng từ tiếng Việt và không dùng từ tiếng Anh trong câu trả lời. "
-        f"Câu hỏi: {question}\nTrả lời:"
-    )
-    return _clean_answer(generate_images(existing_paths, prompt))
-
-
-def answer_image(image_path: str | Path, question: str) -> str:
-    """Backward-compatible single-frame entry point."""
-    return answer_images([image_path], question)

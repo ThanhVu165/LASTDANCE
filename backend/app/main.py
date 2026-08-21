@@ -11,11 +11,17 @@ from app.config import (
     KIS_EXACT_FRAME_ENABLED,
     KIS_LONG_QUERY_CANDIDATES,
     KIS_STORYBOARD_ENABLED,
+    MODEL_QUERY_PLANNER_ENABLED,
+    MODEL_REPAIR_ENABLED,
+    MODEL_RERANK_ENABLED,
+    MODEL_RERANK_NAME,
+    MODEL_RERANK_TOP_VIDEOS,
     QA_TEMPORAL_SAMPLES,
     QA_VLM_TOP_VIDEOS,
     QUERIES_DIR,
     QUERY_TRANSLATION_ENABLED,
     RANKING_CUTOFFS,
+    SIGLIP_INDEX_PATH,
     TRAKE_EXACT_FRAME_ENABLED,
     VIDEOS_DIR,
     VLM_RERANK_ENABLED,
@@ -24,7 +30,9 @@ from app.config import (
     VLM_RERANK_TOP_VIDEOS,
     VQA_DEVICE,
     VQA_MODEL_NAME,
+    VIDEO_WINDOW_INDEX_PATH,
 )
+from app.rerank.model_reranker import model_reranker_status
 from app.routers.kis import router as kis_router
 from app.routers.qa import router as qa_router
 from app.routers.submission import router as submission_router
@@ -90,6 +98,14 @@ def health() -> dict:
         "vqa_device": VQA_DEVICE,
         "vqa_ready": cuda_available or not vqa_requires_cuda,
         "query_translation_enabled": QUERY_TRANSLATION_ENABLED,
+        "model_query_planner_enabled": MODEL_QUERY_PLANNER_ENABLED,
+        "model_rerank_enabled": MODEL_RERANK_ENABLED,
+        "model_rerank_model": MODEL_RERANK_NAME,
+        "model_rerank_top_videos": MODEL_RERANK_TOP_VIDEOS,
+        "model_repair_enabled": MODEL_REPAIR_ENABLED,
+        "model_rerank_status": model_reranker_status(),
+        "siglip_index_ready": SIGLIP_INDEX_PATH.exists(),
+        "video_window_index_ready": VIDEO_WINDOW_INDEX_PATH.exists(),
         "vlm_rerank_enabled": VLM_RERANK_ENABLED,
         "vlm_rerank_top_videos": VLM_RERANK_TOP_VIDEOS,
         "vlm_rerank_frames_per_video": VLM_RERANK_FRAMES_PER_VIDEO,

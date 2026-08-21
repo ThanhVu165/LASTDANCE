@@ -24,16 +24,3 @@ def object_match_score(video_id: str, local_idx: int, keywords: list[str]) -> fl
     joined = " ".join(labels)
     matched = sum(1 for kw in keywords if kw.lower() in joined)
     return matched / max(len(keywords), 1)
-
-
-def object_count(video_id: str, local_idx: int, label_hint: str) -> int:
-    """Number of detected instances whose label contains `label_hint` — used by the
-    Q&A pipeline to answer "how many ..." style questions."""
-    cache = _load_objects_cache()
-    row = cache.get(f"{video_id}:{local_idx}", {})
-    counts = row.get("counts", {})
-    total = 0
-    for label, cnt in counts.items():
-        if label_hint.lower() in label.lower():
-            total += int(cnt)
-    return total

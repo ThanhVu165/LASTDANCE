@@ -42,14 +42,6 @@ def _load_keyframe_index() -> list[dict]:
     return json.loads(KEYFRAME_INDEX_PATH.read_text(encoding="utf-8"))
 
 
-def encode_text(query: str, multilingual: bool | None = None) -> np.ndarray:
-    if multilingual is None:
-        multilingual = is_vietnamese_text(query)
-    model_name = MULTILINGUAL_CLIP_MODEL_NAME if multilingual else CLIP_MODEL_NAME
-    model = _load_model(model_name)
-    return model.encode([query], normalize_embeddings=True).astype(np.float32)
-
-
 def search_text(
     query: str,
     top_k: int = TOP_K_CANDIDATES,

@@ -29,11 +29,9 @@ KEYFRAMES_DIR = DATA_DIR / "keyframes"
 OBJECTS_DIR = DATA_DIR / "objects"
 FEATURES_DIR = DATA_DIR / "features"
 MAP_KEYFRAMES_DIR = DATA_DIR / "map-keyframes"
-METADATA_DIR = DATA_DIR / "metadata"
 INDEX_DIR = DATA_DIR / "index"
 
 QUERIES_DIR = ROOT_DIR / "queries"
-SUBMISSIONS_DIR = ROOT_DIR / "submissions"
 
 KEYFRAME_INDEX_PATH = INDEX_DIR / "keyframe_index.json"
 FAISS_INDEX_PATH = INDEX_DIR / "clip.faiss"
@@ -90,6 +88,81 @@ QUERY_TRANSLATION_ENABLED = os.getenv("AIC_QUERY_TRANSLATION_ENABLED", "1").stri
     not in {"0", "false", "no", "off"}
 QUERY_TRANSLATION_MAX_NEW_TOKENS = int(
     os.getenv("AIC_QUERY_TRANSLATION_MAX_NEW_TOKENS", "128")
+)
+
+# Model-first query planning and multimodal verification.  The planner uses the
+# existing instruction VLM text-only; the dedicated reranker is loaded only for
+# the scoring phase because both 2B models cannot remain resident together on a
+# 6 GiB GPU.
+MODEL_QUERY_PLANNER_ENABLED = os.getenv(
+    "AIC_MODEL_QUERY_PLANNER_ENABLED", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+MODEL_QUERY_PLANNER_MAX_NEW_TOKENS = int(
+    os.getenv("AIC_MODEL_QUERY_PLANNER_MAX_NEW_TOKENS", "768")
+)
+MODEL_RERANK_ENABLED = os.getenv("AIC_MODEL_RERANK_ENABLED", "1").strip().lower() \
+    not in {"0", "false", "no", "off"}
+MODEL_RERANK_NAME = os.getenv(
+    "AIC_MODEL_RERANK_NAME", "Qwen/Qwen3-VL-Reranker-2B"
+)
+MODEL_RERANK_DEVICE = os.getenv("AIC_MODEL_RERANK_DEVICE", "cuda:0")
+# Runtime search must never stall while trying to fetch a multi-gigabyte model.
+# Download/build steps are explicit; an incomplete local cache falls back to the
+# already-installed instruction VLM verifier.
+MODEL_RERANK_LOCAL_FILES_ONLY = os.getenv(
+    "AIC_MODEL_RERANK_LOCAL_FILES_ONLY", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+MODEL_RERANK_TOP_VIDEOS = int(os.getenv("AIC_MODEL_RERANK_TOP_VIDEOS", "40"))
+MODEL_RERANK_FRAMES_PER_VIDEO = int(
+    os.getenv("AIC_MODEL_RERANK_FRAMES_PER_VIDEO", "4")
+)
+MODEL_RERANK_BATCH_SIZE = int(os.getenv("AIC_MODEL_RERANK_BATCH_SIZE", "1"))
+MODEL_RERANK_WEIGHT = float(os.getenv("AIC_MODEL_RERANK_WEIGHT", "0.75"))
+MODEL_RERANK_CONFIDENCE_THRESHOLD = float(
+    os.getenv("AIC_MODEL_RERANK_CONFIDENCE_THRESHOLD", "0.55")
+)
+MODEL_RERANK_MIN_VERIFIED_VIDEOS = int(
+    os.getenv("AIC_MODEL_RERANK_MIN_VERIFIED_VIDEOS", "20")
+)
+MODEL_GENERATIVE_VERIFY_GROUP_SIZE = int(
+    os.getenv("AIC_MODEL_GENERATIVE_VERIFY_GROUP_SIZE", "4")
+)
+MODEL_GENERATIVE_VERIFY_MAX_NEW_TOKENS = int(
+    os.getenv("AIC_MODEL_GENERATIVE_VERIFY_MAX_NEW_TOKENS", "96")
+)
+MODEL_REPAIR_ENABLED = os.getenv("AIC_MODEL_REPAIR_ENABLED", "1").strip().lower() \
+    not in {"0", "false", "no", "off"}
+MODEL_REPAIR_MAX_ROUNDS = int(os.getenv("AIC_MODEL_REPAIR_MAX_ROUNDS", "1"))
+
+# Optional side indexes.  They never replace the organizer CLIP index until a
+# complete checkpoint has been published.
+SIGLIP_MODEL_NAME = os.getenv(
+    "AIC_SIGLIP_MODEL", "google/siglip2-base-patch16-256"
+)
+SIGLIP_DEVICE = os.getenv("AIC_SIGLIP_DEVICE", "cuda:0")
+SIGLIP_QUERY_DEVICE = os.getenv("AIC_SIGLIP_QUERY_DEVICE", "cpu")
+SIDE_RETRIEVAL_TOP_K = int(os.getenv("AIC_SIDE_RETRIEVAL_TOP_K", "400"))
+SIGLIP_INDEX_PATH = INDEX_DIR / "siglip2.faiss"
+SIGLIP_FEATURES_PATH = INDEX_DIR / "siglip2_features.npy"
+SIGLIP_STATE_PATH = INDEX_DIR / "siglip2_state.json"
+VIDEO_WINDOW_EMBEDDING_MODEL_NAME = os.getenv(
+    "AIC_VIDEO_WINDOW_EMBEDDING_MODEL", "Qwen/Qwen3-VL-Embedding-2B"
+)
+VIDEO_WINDOW_DEVICE = os.getenv("AIC_VIDEO_WINDOW_DEVICE", "cuda:0")
+VIDEO_WINDOW_LOCAL_FILES_ONLY = os.getenv(
+    "AIC_VIDEO_WINDOW_LOCAL_FILES_ONLY", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+VIDEO_WINDOW_INDEX_PATH = INDEX_DIR / "video_windows.faiss"
+VIDEO_WINDOW_METADATA_PATH = INDEX_DIR / "video_windows.json"
+VIDEO_WINDOW_FEATURES_PATH = INDEX_DIR / "video_window_features.npy"
+VIDEO_WINDOW_STATE_PATH = INDEX_DIR / "video_window_state.json"
+VIDEO_WINDOW_SIZE = int(os.getenv("AIC_VIDEO_WINDOW_SIZE", "6"))
+VIDEO_WINDOW_STRIDE = int(os.getenv("AIC_VIDEO_WINDOW_STRIDE", "6"))
+VIDEO_WINDOW_TOTAL_PIXELS = int(
+    os.getenv("AIC_VIDEO_WINDOW_TOTAL_PIXELS", str(6 * 192 * 192))
+)
+VIDEO_WINDOW_EMBEDDING_DIM = int(
+    os.getenv("AIC_VIDEO_WINDOW_EMBEDDING_DIM", "1024")
 )
 TRAKE_EXACT_FRAME_ENABLED = os.getenv("AIC_TRAKE_EXACT_FRAME_ENABLED", "1").strip().lower() \
     not in {"0", "false", "no", "off"}
@@ -157,4 +230,3 @@ OCR_MAX_RETRIES = int(os.getenv("AIC_OCR_MAX_RETRIES", "3"))
 TOP_K_CANDIDATES = 400       # default candidates pulled per prompt from FAISS
 MAX_SUBMISSION_ROWS = 100    # contest rule: max 100 answers per query file
 MAX_ANSWER_LENGTH = 100      # contest rule: Q&A answer max length in characters
-MAX_RESULTS_PER_VIDEO = 5    # diversity cap during re-ranking

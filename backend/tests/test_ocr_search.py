@@ -61,39 +61,10 @@ class OcrSearchTests(unittest.TestCase):
         finally:
             temporary.cleanup()
 
-    def test_structured_cache_answer_prefers_informative_line_over_logo_and_clock(self):
-        temporary, path = self._with_cache(
-            {
-                "V:7": {
-                    "schema_version": 2,
-                    "text": "stale text must not win",
-                    "lines": [
-                        {"text": "HTV9", "confidence": 0.99, "box": []},
-                        {"text": "06:30:34", "confidence": 0.99, "box": []},
-                        {
-                            "text": "TRÁI TIM ĐƯỢC VẬN CHUYỂN CẤP TỐC VỀ HUẾ",
-                            "confidence": 0.91,
-                            "box": [[0, 0], [10, 0], [10, 2], [0, 2]],
-                        },
-                    ],
-                }
-            }
-        )
-        try:
-            with patch.object(ocr_search, "OCR_CACHE_PATH", path):
-                self.assertEqual(
-                    ocr_search.extract_answer_from_ocr("V", 7),
-                    "TRÁI TIM ĐƯỢC VẬN CHUYỂN CẤP TỐC VỀ HUẾ",
-                )
-                self.assertNotIn("stale", ocr_search.ocr_text("V", 7))
-        finally:
-            temporary.cleanup()
-
     def test_legacy_string_cache_remains_readable_during_migration(self):
         temporary, path = self._with_cache({"V:3": "Tình trạng sụt lún"})
         try:
             with patch.object(ocr_search, "OCR_CACHE_PATH", path):
-                self.assertEqual(ocr_search.ocr_text("V", 3), "Tình trạng sụt lún")
                 self.assertEqual(
                     ocr_search.ocr_match_score("V", 3, ["sut", "lun"]), 1.0
                 )

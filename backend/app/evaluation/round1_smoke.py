@@ -13,6 +13,7 @@ import time
 
 from app.pipelines.kis_pipeline import run_kis_query
 from app.services.query_processing import parse_semantic_query
+from app.services.query_planner import plan_visual_query
 
 
 SMOKE_QUERIES = {
@@ -48,12 +49,17 @@ def main() -> None:
 
     text = SMOKE_QUERIES[args.query]
     semantic = parse_semantic_query(text)
+    plan = plan_visual_query(text)
     report: dict = {
         "query": args.query,
         "characters": len(text),
         "scene_count": len(semantic.scenes),
         "temporal_edges": semantic.temporal_edges,
         "expansion_count": len(semantic.expansions),
+        "planner_source": plan.source,
+        "planned_scene_count": len(plan.scenes),
+        "planned_prompt_count": len(plan.retrieval_prompts),
+        "repair_query_count": len(plan.repair_queries),
     }
     if not args.parser_only:
         started = time.perf_counter()
@@ -62,6 +68,12 @@ def main() -> None:
             {
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
                 "result_count": len(rows),
+                "model_verified_count": sum(
+                    bool(row.get("model_verified")) for row in rows
+                ),
+                "model_scored_count": sum(
+                    row.get("model_relevance_score") is not None for row in rows
+                ),
                 "distinct_videos": len({row["video_id"] for row in rows}),
                 "top_results": rows[:5],
             }

@@ -85,26 +85,6 @@ OCR_INTENT_MARKERS = (
 
 LONG_QUERY_THRESHOLD = 220
 MAX_VISUAL_CLAUSES = 8
-TEMPORAL_ORDER_MARKERS = (
-    "sau do",
-    "phan canh sau",
-    "tiep theo",
-    "ke tiep",
-    "o dau",
-    "dau doan",
-    "dau clip",
-    "cuoi doan",
-    "cuoi clip",
-    "ket thuc",
-    "later",
-    "after that",
-    "followed by",
-    "next",
-    "at the beginning",
-    "at the end",
-    "the clip begins",
-    "the clip ends",
-)
 
 
 @dataclass(frozen=True)
@@ -183,14 +163,6 @@ def _visual_clauses(text: str) -> list[str]:
             if len(cleaned.split()) >= 3:
                 clauses.append(cleaned)
     return list(dict.fromkeys(clauses))[:MAX_VISUAL_CLAUSES]
-
-
-def has_temporal_order(text: str) -> bool:
-    """Whether a narrative explicitly constrains the order of its scenes."""
-    normalized = " ".join(
-        re.findall(r"[a-z0-9]+", strip_diacritics(text.casefold()))
-    )
-    return any(marker in normalized for marker in TEMPORAL_ORDER_MARKERS)
 
 
 def _temporal_edges(scenes: list[str]) -> list[tuple[int, int]]:

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import difflib
 import json
-import math
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -203,42 +202,3 @@ def ocr_match_score(video_id: str, local_idx: int, keywords: list[str]) -> float
         _document_keyword_score(keyword, document)
         for keyword in normalized_keywords
     ) / len(normalized_keywords)
-
-
-def ocr_text(video_id: str, local_idx: int) -> str:
-    document = _load_ocr_cache().get(f"{video_id}:{local_idx}")
-    return document.text if document is not None else ""
-
-
-_CLOCK_OR_COUNTER = re.compile(r"^(?:\d{1,2}[:.]?){2,4}\d{0,2}$")
-_CHANNEL_OR_FORMAT = re.compile(
-    r"^(?:(?:v|h|q|th|ant|an)tv\w*\d*|hd|sd|4k|live|truc tiep)$"
-)
-
-
-def _answer_line_score(line: OcrSearchLine) -> float:
-    normalized = _normalize_for_match(line.text)
-    if not normalized or _CLOCK_OR_COUNTER.fullmatch(normalized.replace(" ", "")):
-        return -math.inf
-    if _CHANNEL_OR_FORMAT.fullmatch(normalized):
-        return -math.inf
-
-    letters = sum(character.isalpha() for character in line.text)
-    words = normalized.split()
-    if letters < 3 or not words:
-        return -math.inf
-    # Prefer an informative phrase over a corner logo. Confidence breaks ties but
-    # does not erase a long headline merely because one glyph was uncertain.
-    return min(len(words), 12) + min(letters / 10.0, 5.0) + line.confidence
-
-
-def extract_answer_from_ocr(video_id: str, local_idx: int) -> str:
-    document = _load_ocr_cache().get(f"{video_id}:{local_idx}")
-    if document is None or not document.lines:
-        return "unknown"
-    best = max(document.lines, key=_answer_line_score)
-    if _answer_line_score(best) == -math.inf:
-        return "unknown"
-    # Return observed OCR text verbatim. Matching may be fuzzy; answer generation
-    # must not silently invent spelling corrections.
-    return best.text[:100]

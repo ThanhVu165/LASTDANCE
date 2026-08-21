@@ -21,6 +21,8 @@ class KisResult(BaseModel):
     frame_id: int
     local_idx: int
     score: float
+    model_relevance_score: Optional[float] = None
+    model_verified: bool = False
     is_source_frame: bool = False
 
 

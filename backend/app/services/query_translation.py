@@ -117,12 +117,6 @@ def translate_visual_scenes(scenes: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(translated.get(index, "") for index in range(len(scenes)))
 
 
-def translate_visual_query(text: str) -> str | None:
-    """Backward-compatible primary translation for diagnostics/UI."""
-    translations = translate_visual_queries(text)
-    return translations[0] if translations else None
-
-
 def with_english_visual_expansion(text: str, expansions: list[str]) -> list[str]:
     translations = translate_visual_queries(text)
     if not translations:
