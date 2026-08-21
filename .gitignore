@@ -1,0 +1,28 @@
+# Local datasets, generated indexes, videos, keyframes, and model weights
+/data/
+
+# Python environments and caches
+/.pytest_cache/
+/backend/.venv/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# Runtime output and local diagnostics
+/tmp/
+/queries/
+/submissions/
+*.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
