@@ -1,9 +1,16 @@
 # Local datasets, generated indexes, videos, keyframes, and model weights
 /data/
+/models/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
 
 # Python environments and caches
 /.pytest_cache/
 /backend/.venv/
+/.venv-offline/
+/.tools/
 **/__pycache__/
 *.py[cod]
 *.pyo

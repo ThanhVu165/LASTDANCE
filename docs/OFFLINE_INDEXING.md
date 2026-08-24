@@ -1,5 +1,8 @@
 # Thiết kế offline indexing
 
+> **ARCHIVED 24/08/2026:** Thiết kế Qwen video-window cũ đã bị thay thế. Xem
+> `OFFLINE_INDEXING_SPEC.md` cho pipeline frame-level hiện hành.
+
 Offline indexing phải biến video thô thành một kho evidence có timestamp và
 provenance. Mục tiêu không phải tạo một “vector toàn video”, mà tạo nhiều biểu
 diễn bổ sung cho nhau để query-time có thể tìm cảnh, hành động, chữ, tên riêng,

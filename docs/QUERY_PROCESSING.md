@@ -1,5 +1,8 @@
 # Unified model-based query processing
 
+> **ARCHIVED 24/08/2026:** Planner Qwen-primary trong tài liệu này không còn là contract
+> chính. Xem interface và fallback order mới trong `BASELINE_SPEC.md`.
+
 Tài liệu này định nghĩa một luồng hiểu và thực thi query dùng chung cho KIS, QA và
 TRAKE. Đích triển khai là model xử lý semantic; code deterministic chỉ validate
 contract, giới hạn tài nguyên và fallback toàn-query.

@@ -1,5 +1,8 @@
 # Dựng LASTDANCE trên máy khác
 
+> **ARCHIVED 24/08/2026:** Lệnh setup/build dưới đây dành cho backend window-first cũ.
+> Không dùng để build artifact frame-level mới nếu chưa đối chiếu `BASELINE_SPEC.md`.
+
 Tài liệu này dành cho thành viên clone repository, nhận dataset/model artifact,
 build index và chạy hệ thống trên Windows PowerShell.
 

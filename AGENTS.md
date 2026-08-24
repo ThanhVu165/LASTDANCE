@@ -1,93 +1,157 @@
-# AGENTS.md — LASTDANCE repository contract
+# AGENTS.md — LASTDANCE (AIC 2026) — Context cho Codex
 
-File này áp dụng cho toàn repository và là contract mặc định cho người và coding
-agent.
+> File này được Codex tự động đọc ở đầu mỗi phiên làm việc trong repo. Không xóa, chỉ cập
+> nhật khi có thay đổi thật trong spec. Nếu Codex và file này mâu thuẫn nhau — Codex sai,
+> sửa theo file này.
 
-## Đọc trước khi sửa
+---
 
-1. `docs/PROJECT_CONTEXT.md`
-2. `docs/SYSTEM_ARCHITECTURE.md`
-3. `docs/QUERY_PROCESSING.md` nếu đụng query/KIS/QA/TRAKE
-4. `docs/OFFLINE_INDEXING.md` nếu đụng dữ liệu/index/model offline
-5. `docs/MODEL_SELECTION.md` nếu đề xuất/thay model
-6. `docs/CURRENT_STATUS.md`
-7. `docs/DEVELOPMENT_ROADMAP.md`
-8. `docs/TEAM_SETUP.md` nếu thay dependency/lệnh/model artifact
+## 1. Bối cảnh cuộc thi (bắt buộc hiểu trước khi code bất kỳ dòng nào)
 
-Báo cáo E2E có ngày là evidence snapshot. PDF là nguồn thể lệ. Không dùng lịch sử
-chat hoặc file đã bị loại bỏ làm runtime instruction.
+- **Cuộc thi:** AI Challenge (AIC) 2026 — nhiệm vụ Video Corpus Moment Retrieval.
+- **3 dạng câu hỏi:**
+  - **KIS** (Known-Item Search) — tìm đúng khoảnh khắc từ mô tả text.
+  - **Q&A** — trả lời câu hỏi dựa trên nội dung video (có gating BLIP-2 + Qwen VQA).
+  - **TRAKE** — tìm chuỗi khoảnh khắc theo trình tự thời gian (Beam Search + decay).
+- **Chấm điểm:** R-Score và Final Score dựa trên **tối đa 100 kết quả** dạng
+  `(video_id, frame_id)`. **Khóa nộp bài luôn là `(video_id, frame_id)`, KHÔNG BAO GIỜ dùng
+  `local_idx`.**
+- **Dữ liệu:** 500GB video thô, 873 video, mục tiêu nén còn ~80GB keyframe + <5GB
+  vector/text index để nạp vừa RAM máy local.
+- **Máy tham chiếu:** Intel i5-12450H, RTX 4050 Laptop **6 GiB VRAM**, Python 3.11,
+  Windows/Kaggle/Colab.
+- **Thời gian còn lại:** tính từ 23/08/2026, hạn 6 ngày cho toàn bộ pipeline offline + online.
 
-## Mục tiêu sản phẩm
+---
 
-LASTDANCE là hệ thống video retrieval cho KIS, QA và TRAKE. Tối ưu các cutoff
-`R@1, R@5, R@20, R@50, R@100` theo thứ tự:
+## 2. Nguồn chuẩn duy nhất (Source of Truth)
 
-1. tìm đúng video và time window;
-2. phủ đủ scene/điều kiện của query;
-3. rerank bằng evidence nhìn thấy được;
-4. chỉ sau đó mới refine frame, trả lời QA hoặc align TRAKE.
+Ba file sau nằm ở `docs/` trong repo — **PHẢI đọc cả 3 trước khi sửa code liên quan đến
+offline pipeline**, không suy đoán, không tự sáng tác schema mới:
 
-## Kiến trúc bắt buộc
+1. `docs/BASELINE_SPEC.md` — tổng thể toàn hệ thống (offline + online + fusion).
+2. `docs/OFFLINE_INDEXING_SPEC.md` — chi tiết Nhánh 1 (phạm vi làm việc chính của Codex
+   trong repo này).
+3. `docs/ASR_SPEC.md` — chi tiết Nhánh 3, chạy độc lập, chỉ cần biết **data contract**
+   (`asr.sqlite`) để không phá vỡ format khi Nhánh 2 tích hợp.
 
-- Không biểu diễn toàn video bằng một vector hoặc một keyframe.
-- Video là tập window/evidence có timestamp và provenance.
-- `Qwen3-VL-Embedding-2B` là hướng video-window recall chính; organizer CLIP là
-  baseline/fallback cho tới khi window index complete và thắng A/B.
-- Một Qwen `UnifiedQueryPlan` là đường hiểu semantic chung cho KIS/QA/TRAKE.
-- Dedicated Qwen reranker là đích query–video/window scoring; generative verifier
-  là fallback model hiện tại.
-- OCR, object, caption, shot và ASR là evidence bổ sung, không phải query parser
-  hoặc answer generator độc lập.
-- Regex/heuristic chỉ dùng cho schema, ID mapping và resource bound. Fallback
-  semantic là nguyên query, không tự suy scene/question/moment bằng rule.
-- Không thêm patch riêng cho query mẫu, ngôn ngữ, màu hoặc object.
+**Nếu code hiện tại lệch với spec → sửa code theo spec, không sửa spec theo code**, trừ khi
+người dùng xác nhận rõ ràng đây là thay đổi có chủ đích (và phải ghi vào Changelog của spec).
 
-## Data và index invariants
+---
 
-- `local_idx` là keyframe nội bộ; `frame_id` là frame thật dùng cho submission.
-- `pts_time` là trục join giữa window, OCR, caption, object và ASR.
-- Mọi artifact có model/config/dataset signature.
-- State `complete=false` phải fail closed; file feature/index tồn tại chưa đủ.
-- Không cộng raw cosine từ các embedding space khác nhau; dùng rank calibration.
-- Không xóa `data/`, OCR state, production index hoặc model cache như cleanup.
-- Không commit dataset, cache, `.venv`, query, submission, log hoặc credential.
+## 3. Phạm vi phiên làm việc này (Nhánh 1 — Offline Indexing)
 
-## Model và GPU
+Codex đang làm việc trong scope **Nhánh 1** (video preprocessing + offline indexing).
+Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa code trong `online/` hoặc
+`app/`** trừ khi được yêu cầu rõ; nếu phát hiện online/ cần đổi để khớp thay đổi ở offline/,
+**dừng lại và báo cáo**, không tự sửa chéo nhánh.
 
-Máy tham chiếu là RTX 4050 Laptop 6 GiB. Không chạy đồng thời backend Qwen, OCR,
-SigLIP builder hoặc Qwen embedding/reranker build. Các model 2B phải load/release
-theo phase. Runtime không tự tải model nhiều GB và không âm thầm chuyển CUDA sang
-CPU.
+### Việc thuộc phạm vi:
+- `offline/` — AutoShot shot detection, keyframe extraction, dedup/lọc nhiễu, visual
+  embedding (CLIP/SigLIP/BEiT-3), OCR (Gemini + EasyOCR fallback), build FAISS + SQLite FTS5.
+- `shared/schemas/` — Pydantic schema dùng chung (`FrameRecord`, `OcrResult`, `AsrSegment`)
+  — sửa ở đây ảnh hưởng cả 2 nhánh, cần cẩn trọng và thông báo khi đổi.
+- `scripts/` — script chạy batch trên Kaggle, tách nhỏ danh sách video song song.
 
-## Workflow thay đổi
+---
 
-1. Đọc pipeline, config, tests và status liên quan.
-2. Nếu thay retrieval/index, tạo baseline/dev subset trước.
-3. Giữ behavior mới sau feature/index completeness gate.
-4. Builder phải checkpoint/resume và publish atomic.
-5. Chạy từ `backend/`:
+## 4. Nguyên tắc bất di bất dịch (không được vi phạm dù tối ưu thế nào)
 
-   ```powershell
-   .\.venv\Scripts\python.exe -m compileall -q app
-   .\.venv\Scripts\python.exe -m unittest discover -s tests -q
-   ```
+1. **Không mean-pool nhiều keyframe/shot thành 1 vector.** Mỗi keyframe có vector riêng.
+2. **`keyframe_uid`** là khóa nội dung (deterministic hash `blake2b` từ
+   `video_id:shot_id:local_idx`) dùng cho FAISS/OCR/ASR — **không dùng vị trí insert
+   (`faiss_row_id`/row index)** làm khóa. Xem công thức chính xác ở
+   `OFFLINE_INDEXING_SPEC.md` §3.2a.
+3. **`local_idx`** chỉ dùng nội bộ để trỏ file ảnh (`{video_id}/{shot_id}_{local_idx}.jpg`)
+   — không dùng làm khóa nộp bài hay dedup.
+4. **Không hardcode path tuyệt đối** — mọi path build từ biến môi trường `AIC_DATA`
+   (default `data/`).
+5. **Không giả định FPS/resolution/duration** — luôn đọc thật từ `ffprobe` (bước Inventory).
+6. **Không giả định VRAM vô hạn** — 6GB VRAM local, phải ghi rõ ước tính và cơ chế
+   load/release model theo pha nếu chạy local.
+7. **Vector bắt buộc ép `float16`** trước khi lưu/push (giảm dung lượng + băng thông HF).
+8. **3 FAISS index (CLIP/SigLIP/BEiT-3) build độc lập, không cần đồng bộ thời gian/thứ tự**
+   — vì dùng `keyframe_uid` làm khóa qua `IndexIDMap`.
+9. **Một `video_id` chỉ `complete = true` khi thỏa đủ Publishing Criteria** (mục 6 dưới) —
+   không set `complete=true` khi còn checkpoint dở dang, không được bỏ bớt điều kiện để
+   tiết kiệm thời gian.
 
-6. Với ranking/model/index, báo Recall@k khi có ground truth, result/verified
-   count, distinct video, latency P50/P95, peak VRAM và rollback.
-7. Cập nhật `CURRENT_STATUS.md`, kiến trúc, indexing, roadmap và setup nếu contract,
-   model, artifact hoặc command thay đổi.
+---
 
-## Không được làm
+## 5. Môi trường vận hành thực tế — Kaggle + HuggingFace Dataset
 
-- Không publish partial FAISS index hoặc sửa state complete thủ công.
-- Không mix score không hiệu chuẩn.
-- Không cho answer model chạy trước khi retrieval chọn được evidence credible.
-- Không tuyên bố Top 100 đều đúng hoặc model tốt hơn chỉ từ smoke test.
-- Không bỏ CLIP/tournament fallback trước khi replacement qua regression test.
-- Không dùng `git reset --hard` hoặc ghi đè dirty worktree.
+- **Preprocessing (shot detection, keyframe extraction, dedup)** → chạy **local CPU**, tiết
+  kiệm GPU quota Kaggle.
+- **Embedding (CLIP/SigLIP/BEiT-3) + OCR fallback (EasyOCR)** → chạy **Kaggle GPU theo
+  batch**. Quota Kaggle free: **30h/tuần** — Nhánh 1 và Nhánh 3 (ASR) dùng **2 tài khoản
+  Kaggle/Colab riêng biệt**, không tranh chấp quota với nhau.
+- **Đồng bộ artifact Kaggle ↔ máy local** qua **HuggingFace Dataset (Git LFS)**:
+  ```
+  Kaggle Notebook (build) --push_to_hub()--> HF Dataset (Git LFS) --snapshot_download()--> Local
+  ```
+  Bắt buộc:
+  - Vector đã ép `float16` trước khi push.
+  - **Không push từng video một** — gom batch (50–100 video/lần hoặc cuối mỗi phiên Kaggle).
+  - Chỉ `snapshot_download()` full repo về local 1 lần trước khi thi, không pull lại giữa
+    chừng trừ khi có patch khẩn.
+  - Đặt tên revision/commit theo batch (`batch-01`, `batch-02`...) để rollback không phải
+    re-push toàn bộ.
 
-## Definition of done
+---
 
-Một thay đổi retrieval hoàn tất khi code compile, test pass, API giữ schema/count,
-index/failure fallback được kiểm tra, mapping frame đúng, đo latency/VRAM, có A/B
-trên ground truth nếu thay ranking, và tài liệu phản ánh đúng active/partial/planned.
+## 6. Publishing Criteria — điều kiện "Ready" để Nhánh 2 dùng được
+
+- [ ] `complete = true` tính theo từng `video_id` (không phải toàn catalog).
+- [ ] Tập `keyframe_uid` trong `frames.csv` khớp 100% với tập ID đã add vào **cả 3** file
+      FAISS (diff bằng code, không đếm dòng thô).
+- [ ] Không có `NaN`/`Inf` trong bất kỳ vector nào.
+- [ ] Norm vector ≈ 1 sau L2 normalize (kiểm tra sample ngẫu nhiên).
+- [ ] Mapping `video_id`/`frame_id`/`pts_time` đã xác thực qua Sanity Check thủ công.
+- [ ] Checkpoint/resume hoạt động đúng (test bằng cách ngắt giữa batch rồi chạy lại — không
+      duplicate, không mất dữ liệu).
+
+---
+
+## 7. Rủi ro đã biết — KHÔNG cần re-investigate, đã có quyết định
+
+- **AutoShot model weight chỉ có trên Baidu Netdisk** (không có trên GitHub Release/Google
+  Drive, cần passcode). Repo gốc `wentaozhu/AutoShot` không có `pip install` sẵn, không có
+  script inference đơn giản cho 1 video — chỉ có script eval trên benchmark SHOT dataset,
+  cần tự viết wrapper inference riêng cho 873 video của tụi mình.
+  **Trạng thái hiện tại: đang thử tải Baidu trước.** Nếu không tải được trong thời gian hợp
+  lý, phương án dự phòng đã bàn: **TransNetV2** (có pip package + weight GitHub, dễ triển
+  khai hơn, AutoShot chỉ hơn ~4.2% F1 trên benchmark riêng của họ — không phải chênh lệch
+  bắt buộc phải theo bằng mọi giá). Runtime dev hiện dùng `transnetv2-pytorch==1.0.5`, là
+  port PyTorch bên thứ ba chứ không phải TensorFlow SavedModel gốc của tác giả. Khi A/B với
+  AutoShot phải ghi rõ đây là AutoShot gốc so với TransNetV2 port; không dùng kết quả này để
+  suy ngược hoặc xác nhận chênh lệch F1 trong paper giữa hai implementation gốc.
+- **EasyOCR full 873 video có thể không kịp 6 ngày** — ưu tiên Gemini API OCR trước,
+  EasyOCR chạy nền song song làm fallback, không chặn critical path.
+- **Thể lệ AIC 2026 có internet trong phòng thi hay không — CHƯA XÁC NHẬN.** Ảnh hưởng trực
+  tiếp đến việc Gemini API (OCR + Query Planning) là primary hay phải coi Qwen3-VL local là
+  primary thật sự. Không code phần phụ thuộc giả định "chắc chắn có internet" cho đến khi
+  có xác nhận.
+
+---
+
+## 8. Việc KHÔNG được tự ý làm
+
+- Không đổi `keyframe_uid` trở lại kiểu positional/row-index.
+- Không tự thêm audio captioning phi ngôn ngữ (BEATs) hay speaker diarization — đã bị cắt
+  khỏi scope Nhánh 3 để kịp deadline.
+- Không tự ý build thêm 1 visual index đã gộp sẵn (SRRF) ở Nhánh 1 — việc gộp 3 điểm
+  CLIP/SigLIP/BEiT-3 thành `score_visual` là việc của Nhánh 2 lúc query, không phải lúc index.
+- Không đổi tên cột SQL giữa `ocr.sqlite` và `asr.sqlite` mà không đối chiếu cả 2 spec —
+  hai bảng phải giữ cấu trúc song song (`detected_text` vs `transcribed_text`) để Nhánh 2
+  dùng chung 1 module `FtsSearcher`.
+
+---
+
+## 9. Khi bắt đầu 1 task cụ thể trong phiên này
+
+Trước khi code, Codex nên tự trả lời (và nói rõ trong phản hồi):
+1. Task này thuộc bước nào trong pipeline (`OFFLINE_INDEXING_SPEC.md` §1–3)?
+2. Input/output chính xác là gì, khớp schema nào trong `shared/schemas/`?
+3. Chạy ở đâu — local CPU hay Kaggle GPU? Có đụng tới quota GPU không?
+4. Có điều kiện nào trong Publishing Criteria (§6 ở trên) liên quan đến task này không?

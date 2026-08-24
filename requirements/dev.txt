@@ -1,0 +1,2 @@
+# Lightweight environment sufficient for contract/unit tests without model weights.
+-r base.txt

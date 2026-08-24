@@ -1,5 +1,8 @@
 # Quyết định lựa chọn model
 
+> **ARCHIVED 24/08/2026:** Bảng model này thuộc kiến trúc window-first cũ. Model budget
+> hiện hành nằm trong `BASELINE_SPEC.md`.
+
 Cập nhật: 21/08/2026. Các quyết định dưới đây tối ưu cho RTX 4050 Laptop 6 GiB,
 query KIS 2–3 phút, QA/TRAKE 3–5 phút và khả năng build offline không mất phí API.
 Model chỉ được thay khi thắng A/B trên dữ liệu video của dự án.

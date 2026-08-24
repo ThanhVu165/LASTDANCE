@@ -1,174 +1,74 @@
-# LASTDANCE — AIC2026 video retrieval
+# LASTDANCE - AIC 2026 frame-level video retrieval
 
-LASTDANCE nhận một câu truy vấn tự nhiên và trả Top 100 kết quả cho KIS, QA hoặc
-TRAKE. Hướng phát triển hiện tại là **video-window retrieval + model-based
-planning/reranking/verification**. OCR, object, caption và sau này ASR là các
-kênh evidence bổ sung; không kênh nào thay thế việc hiểu toàn bộ video scene.
+LASTDANCE nhận query tự nhiên và trả tối đa 100 kết quả cho KIS, QA hoặc TRAKE.
+Từ ngày 24/08/2026, kiến trúc chính đã pivot từ Qwen video-window sang retrieval
+frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe_uid`.
 
-## Tài liệu chuẩn
+## Nguồn chuẩn
 
 Đọc theo thứ tự:
 
-1. [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md) — bài toán và quyết định sản phẩm.
-2. [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md) — pipeline và vai trò model.
-3. [`docs/QUERY_PROCESSING.md`](docs/QUERY_PROCESSING.md) — một model-based query plan cho KIS/QA/TRAKE.
-4. [`docs/OFFLINE_INDEXING.md`](docs/OFFLINE_INDEXING.md) — cách biến video thành evidence/index.
-5. [`docs/MODEL_SELECTION.md`](docs/MODEL_SELECTION.md) — quyết định và challenger cho từng model.
-6. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) — phần đang hoạt động và đang dở.
-7. [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md) — thứ tự phát triển và acceptance gate.
-8. [`docs/TEAM_SETUP.md`](docs/TEAM_SETUP.md) — dựng trên máy khác.
-9. [`docs/AI_COLLABORATION_GUIDE.md`](docs/AI_COLLABORATION_GUIDE.md) — quy tắc làm việc với AI.
+1. [`AGENTS.md`](AGENTS.md) - phạm vi và các invariant bắt buộc.
+2. [`docs/BASELINE_SPEC.md`](docs/BASELINE_SPEC.md) - contract tổng thể offline/online.
+3. [`docs/OFFLINE_INDEXING_SPEC.md`](docs/OFFLINE_INDEXING_SPEC.md) - Nhánh 1.
+4. [`docs/ASR_SPEC.md`](docs/ASR_SPEC.md) - data contract Nhánh 3.
+5. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) - trạng thái triển khai thực tế.
+6. [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) - môi trường Windows/Kaggle.
 
-[`docs/Thong tin vong So tuyen AIC2026.pdf`](docs/Thong%20tin%20vong%20So%20tuyen%20AIC2026.pdf)
-là nguồn thể lệ. Báo cáo E2E có ngày là bằng chứng kiểm thử tại một checkpoint,
-không phải hướng dẫn runtime.
+Các tài liệu window-first cũ được giữ lại làm lịch sử, không còn là runtime instruction.
 
-## Kiến trúc ngắn gọn
+## Kiến trúc mới
 
 ```text
-query
-  → unified Qwen structured planner cho KIS/QA/TRAKE
-  → frame recall + video-window recall + indexed evidence
-  → video/scene coverage và temporal aggregation
-  → Qwen multimodal reranker/verifier
-  → bounded repair retrieval
-  → Top 100 + exact source-frame refinement
+video
+  -> inventory bằng ffprobe
+  -> shot detection (TransNetV2 tạm thời; AutoShot khi có weight)
+  -> 3 keyframe/shot + blur/dedup filtering
+  -> CLIP + SigLIP + BEiT-3 vector riêng cho từng keyframe
+  -> frames.csv + 3 FAISS IndexIDMap + ocr.sqlite
+
+audio
+  -> Whisper/phoWhisper
+  -> temporal alignment bằng pts_time
+  -> asr.sqlite
 ```
 
-Không dùng một vector để đại diện toàn video. Offline pipeline giữ một tập vector
-window cùng timestamp, frame mapping, shot, OCR, object và structured caption.
-Chi tiết: [`docs/OFFLINE_INDEXING.md`](docs/OFFLINE_INDEXING.md).
+Nhánh online sẽ gộp SigLIP + BEiT-3 bằng SRRF thành đúng một `score_visual`; CLIP là
+rollback. Sau đó mới fusion visual/OCR/ASR. Nhánh 1 không build index visual đã gộp.
 
-## Model theo vai trò
-
-| Vai trò | Model | Trạng thái |
-|---|---|---|
-| Baseline frame recall | organizer `clip-ViT-B-32` | Production |
-| Vietnamese CLIP query | `clip-ViT-B-32-multilingual-v1` | Production |
-| Unified planner, verifier, VQA, offline caption | `Qwen/Qwen3-VL-2B-Instruct` | KIS planner/verifier/VQA active; unified QA/TRAKE plan và caption là roadmap |
-| Video-window embedding | `Qwen/Qwen3-VL-Embedding-2B` | Builder có, index partial |
-| Dedicated query–video rerank | `Qwen/Qwen3-VL-Reranker-2B` | Adapter có, checkpoint chưa active |
-| Optional frame recall | `google/siglip2-base-patch16-256` | Chưa build full index |
-| OCR | EasyOCR CRAFT + `latin_g2` | Builder hoạt động, chưa xác nhận full collection |
-| OCR challenger | PP-OCRv5 Latin; PP-OCRv6 sau dictionary/runtime validation | Benchmark riêng, chưa thay baseline |
-| ASR | Chưa khóa model | Sau KIS/QA |
-
-Tên model trong config không có nghĩa model đang active. Kiểm tra `/health`, file
-state và [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md). Lý do chọn model nằm
-trong [`docs/MODEL_SELECTION.md`](docs/MODEL_SELECTION.md).
-
-## Dữ liệu
+## Cấu trúc repo trong giai đoạn migration
 
 ```text
-data/
-  videos/<video_id>.mp4
-  keyframes/<video_id>/<NNN>.jpg
-  objects/<video_id>/<NNN>.json
-  features/<video_id>.npy
-  map-keyframes/<video_id>.csv
-  metadata/<video_id>.json
-  index/
+offline/          # Nhánh 1 mới
+shared/schemas/   # FrameRecord, OcrResult, AsrSegment
+scripts/          # CLI local/Kaggle
+tests/            # contract test cho kiến trúc mới
+backend/app/      # implementation window-first cũ, chưa wire vào pipeline mới
 ```
 
-`local_idx` là số keyframe nội bộ. `frame_id` là frame thật trong MP4 và là giá
-trị dùng cho preview chính xác/nộp bài. Không được hoán đổi hai trường này.
+## Chạy lát cắt offline hiện tại
 
-## Cài đặt nhanh trên Windows
+Bootstrap Windows dựng Python 3.11 + FFmpeg đã pin, kiểm tra checksum, doctor, compile và
+test. Toàn bộ dữ liệu được định vị qua `AIC_DATA`; không ghi path tuyệt đối vào artifact.
 
 ```powershell
-cd C:\LASTDANCE\backend
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install `
-  torch==2.12.1 torchvision==0.27.1 `
-  --index-url https://download.pytorch.org/whl/cu130
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m pip check
+.\scripts\bootstrap_miniforge_windows.ps1
+$env:AIC_DATA = "D:\path\to\aic-data"
+.\scripts\run_offline_windows.ps1 `
+  -Module scripts.build_inventory -PythonArguments @("--limit", "10")
 ```
 
-Không cài VietOCR vào environment production vì pin Pillow xung đột. Hướng dẫn
-đầy đủ và cách xử lý Git ownership nằm trong [`docs/TEAM_SETUP.md`](docs/TEAM_SETUP.md).
+Pipeline hiện có inventory, TransNetV2 shot detection, Begin/Middle/End extraction,
+Laplacian/pHash quality manifest và `frames.csv` catalog builder fail-closed. Weight
+TransNetV2 bundle trong package pin và được kiểm tra SHA-256 trước load; không tải weight
+trong lúc xử lý video. Embedding/OCR GPU chưa chạy trong lát cắt này.
 
-## Build index
+## Invariant quan trọng
 
-Base index bắt buộc:
-
-```powershell
-cd C:\LASTDANCE\backend
-$env:PYTHONPATH = "C:\LASTDANCE\backend"
-.\.venv\Scripts\python.exe -m app.indexing.build_index
-```
-
-Video-window index — hiện là builder đang phát triển, chạy subset trước:
-
-```powershell
-.\.venv\Scripts\python.exe -m app.indexing.video_window_index `
-  --limit 100 --batch-size 1 --checkpoint-every 25
-```
-
-Chỉ bỏ `--limit` sau khi subset có ground truth chứng minh lợi ích. Index chỉ được
-dùng khi `video_window_state.json` có `complete=true`. Không chạy builder GPU cùng
-backend/OCR/side builder trên GPU 6 GiB.
-
-OCR offline:
-
-```powershell
-.\.venv\Scripts\python.exe -m app.indexing.ocr_index `
-  --limit 20 --checkpoint-every 5
-```
-
-OCR có checkpoint/resume; `Ctrl+C` không làm mất checkpoint đã publish. Không xóa
-cache/state để chạy lại trừ khi chủ động đổi signature và đã sao lưu artifact.
-
-## Kiểm thử
-
-```powershell
-cd C:\LASTDANCE\backend
-.\.venv\Scripts\python.exe -m compileall -q app
-.\.venv\Scripts\python.exe -m unittest discover -s tests -q
-```
-
-Smoke GPU chỉ chạy khi backend và các builder khác đã dừng.
-
-## Khởi động
-
-Backend:
-
-```powershell
-cd C:\LASTDANCE\backend
-$env:PYTHONPATH = "C:\LASTDANCE\backend"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app `
-  --host 127.0.0.1 --port 8000
-```
-
-Frontend:
-
-```powershell
-cd C:\LASTDANCE\frontend
-C:\LASTDANCE\backend\.venv\Scripts\python.exe -m streamlit run `
-  streamlit_app.py --server.address 127.0.0.1 --server.port 8501
-```
-
-Kiểm tra `http://127.0.0.1:8000/health`. Với index partial, trường
-`video_window_index_ready=false` là đúng và hệ thống giữ CLIP fallback.
-
-## API
-
-| Endpoint | Chức năng |
-|---|---|
-| `GET /health` | Model, CUDA, index và fallback status |
-| `POST /kis/search` | KIS Top 100 |
-| `POST /qa/search` | QA Top 100 |
-| `POST /trake/search` | TRAKE Top 100 sequence hypotheses |
-| `GET /video/{video_id}/keyframe/{local_idx}` | Keyframe nội bộ |
-| `GET /video/{video_id}/frame/{frame_id}` | Frame thật từ MP4 |
-| `/submission/*` | Validate/export CSV/ZIP |
-
-## Nguyên tắc phát triển
-
-- Retrieval đúng video/window trước, rerank và answer sau.
-- Model hiểu semantic; rule chỉ giữ contract và fallback.
-- Không cộng cosine thô từ các embedding space khác nhau.
-- Không publish index dở.
-- Mọi thay đổi model/index phải có dev set, Recall@k, latency, VRAM và rollback.
-- Không commit `data/`, model cache, `.venv`, query, submission hoặc credential.
+- Submission và dedup dùng `(video_id, frame_id)`, không dùng `local_idx`.
+- FAISS/OCR/ASR join bằng `keyframe_uid` deterministic.
+- Không mean-pool keyframe thành một vector shot/video.
+- Ba FAISS index build độc lập và vector lưu `float16`.
+- Không set `complete=true` nếu thiếu bất kỳ Publishing Criteria nào.
+- Không hardcode FPS, resolution, duration hoặc đường dẫn dữ liệu.
+- Không tự động phụ thuộc cloud khi internet phòng thi chưa được xác nhận.
