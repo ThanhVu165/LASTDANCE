@@ -6,6 +6,7 @@ Target runtime is CPython 3.11.9. Do not install every profile into one environm
 |---|---|---|
 | `dev.txt` | schema/unit tests, no model | any CPU machine |
 | `offline-local.txt` | inventory, TransNetV2 CPU, filtering, FAISS build | local Windows/Linux |
+| `shot-colab-gpu.txt` | TransNetV2 CUDA shot detection, giữ Torch có sẵn | Google Colab T4 |
 | `kaggle-gpu.txt` | CLIP/SigLIP/BEiT-3 batch embedding | Kaggle GPU |
 
 Trên Windows sạch, `scripts/bootstrap_miniforge_windows.ps1` là entry point khuyến nghị:
@@ -24,6 +25,8 @@ checks both executables and their versions.
 PyTorch is pinned only in the local shot profile. Kaggle supplies a CUDA-matched PyTorch;
 replacing it from a generic requirements file can silently break GPU support. Run the doctor
 after installation and record `torch`, CUDA and GPU information in the batch report.
+Colab Shot Detection phải dùng `shot-colab-gpu.txt`, chọn `--device cuda` tường minh và qua
+parity gate trong `docs/SHOT_DETECTION_RUNBOOK.md` trước khi chạy batch thật.
 
 `transnetv2-pytorch==1.0.5` bundles its default weight; the pipeline pins and verifies that
 file's SHA-256 before model construction. `AIC_TRANSNETV2_WEIGHTS` and

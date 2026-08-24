@@ -1,4 +1,4 @@
-"""Local-CPU preprocessing stages."""
+"""Offline preprocessing with explicit CPU/CUDA provenance per stage."""
 
 from .inventory import build_inventory, discover_videos, probe_video
 from .keyframes import (

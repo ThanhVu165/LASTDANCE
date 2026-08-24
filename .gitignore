@@ -20,6 +20,7 @@
 /queries/
 /submissions/
 *.log
+/worker-*.txt
 
 # Local configuration and credentials
 .env

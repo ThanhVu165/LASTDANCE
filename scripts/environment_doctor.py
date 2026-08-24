@@ -42,6 +42,13 @@ _PROFILE_PACKAGES = {
         "faiss-cpu": ("faiss", "1.9.0"),
         "torch": ("torch", "2.12.1"),
         "transnetv2-pytorch": ("transnetv2_pytorch", "1.0.5"),
+        "ffmpeg-python": ("ffmpeg", "0.2.0"),
+    },
+    "shot-colab-gpu": {
+        **_BASE_PACKAGES,
+        "torch": ("torch", None),
+        "transnetv2-pytorch": ("transnetv2_pytorch", "1.0.5"),
+        "ffmpeg-python": ("ffmpeg", "0.2.0"),
     },
     "kaggle-gpu": {
         **_BASE_PACKAGES,
@@ -167,13 +174,13 @@ def collect_checks(
         check_package(distribution, module, expected)
         for distribution, (module, expected) in _PROFILE_PACKAGES[profile].items()
     )
-    if profile == "offline-local":
+    if profile in {"offline-local", "shot-colab-gpu"}:
         if check_data:
             checks.append(check_data_layout(values))
         checks.append(check_executable("ffmpeg", values.get("AIC_FFMPEG", "ffmpeg")))
         checks.append(check_executable("ffprobe", values.get("AIC_FFPROBE", "ffprobe")))
         checks.extend(check_transnet_weights(values))
-    if profile == "kaggle-gpu":
+    if profile in {"kaggle-gpu", "shot-colab-gpu"}:
         try:
             import torch
 

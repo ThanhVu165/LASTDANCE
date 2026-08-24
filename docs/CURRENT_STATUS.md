@@ -27,6 +27,9 @@ wire vào dispatch logic mới.
 - Shot manifest schema v2 validate boundary tăng dần, không overlap, ghi rõ mọi
   `excluded_transition_ranges` và cảnh báo (không fail) nếu tỷ lệ frame transition bị loại
   vượt 1%; lỗi coverage accounting vẫn fail closed.
+- Shot adapter hỗ trợ device `cpu`/`cuda` tường minh, CPU là default và CUDA fail closed nếu
+  không khả dụng. Batch runner dùng chung một model, ghi runtime/provenance/peak CUDA và
+  atomic-publish từng manifest; parity checker so exact boundary/range CPU–CUDA.
 - Keyframe plan chọn Begin/Middle/End theo timestamp frame thật từ `ffprobe`, dedup shot
   ngắn và sinh `FrameRecord` với path tương đối dưới `AIC_DATA`. Builder load manifest v2
   qua validator, truyền `excluded_transition_ranges` tường minh cho planner và planner
@@ -52,7 +55,7 @@ wire vào dispatch logic mới.
 ## Kiểm thử
 
 - Compile `offline shared scripts tests`: pass.
-- Test Nhánh 1: 50/50 pass bằng environment production Python 3.11.9.
+- Test Nhánh 1: 58/58 pass bằng environment production Python 3.11.9.
 - Compile legacy `backend/app`: pass.
 - Không chạy được toàn bộ backend test trong môi trường hiện tại vì thiếu `fastapi` và
   `opencv-python`; đây là dependency-environment blocker, không phải regression đã quan sát.
@@ -75,14 +78,14 @@ wire vào dispatch logic mới.
   git diff --check
   ```
 
-- Kết quả gần nhất: compile pass và 50/50 test Nhánh 1 pass.
+- Kết quả gần nhất: compile pass và 58/58 test Nhánh 1 pass.
 - Chưa có artifact production mới: chưa sinh `inventory.json`, shot manifest,
   `frames.csv`, FAISS hoặc SQLite từ dữ liệu thật; do đó mọi video vẫn phải được xem là
   `complete=false`.
 - Chưa đo throughput, peak VRAM, disk size hoặc ETA vì chưa chạy model/dataset thật.
 - Environment production đã được clean-install và update idempotent: CPython 3.11.9,
   FFmpeg/ffprobe 7.1.1, Torch 2.12.1, FAISS CPU 1.9.0 và TransNetV2 package 1.0.5.
-- Toolchain doctor profile `offline-local`, compile và 50/50 test đều pass.
+- Toolchain doctor profile `offline-local`, compile và 58/58 test đều pass.
 - Đã tạo lock riêng Windows Conda-native + pip-transitive và runner không sửa PATH hệ thống.
 - Miniforge installer 26.3.2-3 đã tải và SHA-256 pass. Silent install vào repo thất bại với
   exit code 2 do đường dẫn có khoảng trắng; không có environment/toolchain partial được tạo.
@@ -123,15 +126,18 @@ wire vào dispatch logic mới.
   Cosine dedup chờ embedding và không nằm trên critical path hiện tại.
 - Chưa build CLIP/SigLIP/BEiT-3 embedding hoặc FAISS `IndexIDMap`.
 - Chưa có `ocr.sqlite` hoặc `asr.sqlite`.
-- Chưa chạy Kaggle GPU, chưa dùng quota và chưa push Hugging Face Dataset.
+- Chưa chạy Kaggle GPU hoặc Colab CUDA, chưa dùng quota và chưa push Hugging Face Dataset.
+  Đường chạy Colab đã có code/test local nhưng parity thật trên T4 vẫn đang chờ chạy đủ 5
+  video; chưa được chia production batch trước khi gate này PASS.
 - Internet trong phòng thi chưa xác nhận; Gemini không được coi là dependency bắt buộc.
 
 ## Bước tiếp theo
 
-1. Tạo embedding builders có `--limit`, checkpoint/resume, signature và float16 output.
-2. Build ba FAISS `IndexIDMap` độc lập và validator diff `keyframe_uid` theo video.
-3. Chạy ground-truth A/B trước khi bật blur/pHash filtering hoặc đổi shot detector.
-4. A/B TransNetV2 port với AutoShot gốc khi weight AutoShot được xác nhận.
+1. Chạy Colab T4 parity đủ 5 dev video; chỉ chia shot batch CPU/CUDA nếu mọi boundary/range
+   khớp 100%.
+2. Tạo embedding builders có `--limit`, checkpoint/resume, signature và float16 output.
+3. Build ba FAISS `IndexIDMap` độc lập và validator diff `keyframe_uid` theo video.
+4. Chạy ground-truth A/B trước khi bật blur/pHash filtering hoặc đổi shot detector.
 
 ## Log phiên
 
@@ -142,12 +148,12 @@ wire vào dispatch logic mới.
 
 ### Đang làm dở (task hiện tại, nếu có)
 
-- Task: Hoàn thiện Nhánh 1 frame-level và chuẩn bị visual embedding trên Kaggle.
-- File đang sửa tiếp: không còn code/preprocessing dở; dev-subset 5 video đã hoàn tất tới
-  `frames.csv`, bước kế tiếp là embedding builders và FAISS.
-- Đã làm tới bước nào / còn thiếu gì: môi trường/doctor pass; shot schema v2, batch exact
-  extraction, quality report và dev catalog đã chạy thật. Chưa chốt threshold production,
-  chưa build CLIP/SigLIP/BEiT-3, OCR/ASR hoặc production index.
+- Task: xác minh parity Shot Detection CPU–Colab CUDA rồi chia batch 873 video.
+- File đang sửa tiếp: code và runbook đã hoàn tất local; bước còn lại là chạy thật trên T4,
+  không phải viết adapter Colab riêng.
+- Đã làm tới bước nào / còn thiếu gì: dev-subset CPU đã hoàn tất tới `frames.csv`; CUDA CLI,
+  batch report và comparator đã test local. Còn thiếu parity thật 5/5 trên T4, sau đó mới
+  được chạy production batch. Embedding CLIP/SigLIP/BEiT-3 vẫn chưa build.
 - **Lệnh để tự kiểm tra trạng thái thật** (không tin lời mô tả, chạy lại):
   ```powershell
   git status --short
@@ -195,10 +201,28 @@ wire vào dispatch logic mới.
 
 ### Việc CHƯA làm, ưu tiên tiếp theo
 
-1. Build CLIP/SigLIP/BEiT-3 embedding theo batch trên Kaggle, output float16 có signature.
-2. Build ba FAISS `IndexIDMap` độc lập và diff UID với dev `frames.csv`.
-3. Chạy ground-truth A/B trước khi bật blur/pHash filter.
-4. Benchmark TransNetV2 port với AutoShot gốc khi weight AutoShot được xác nhận.
+1. Chạy parity CPU–Colab CUDA đủ 5 video; chưa chạy batch 873 trước khi 5/5 PASS.
+2. Build CLIP/SigLIP/BEiT-3 embedding theo batch trên Kaggle, output float16 có signature.
+3. Build ba FAISS `IndexIDMap` độc lập và diff UID với dev `frames.csv`.
+4. Chạy ground-truth A/B trước khi bật blur/pHash filter hoặc đổi detector.
+
+### [24/08/2026] Phiên #8
+- Cho phép Shot Detection dùng Colab CUDA theo quyết định mới, vẫn giữ CPU làm default và
+  fail closed nếu CUDA không khả dụng; cập nhật Changelog của cả hai spec liên quan.
+- Thêm profile `shot-colab-gpu`, batch runner dùng một model, runtime/VRAM report, exact
+  CPU–CUDA manifest comparator và danh sách parity 5 video cố định trong repo.
+- Viết lại runbook với cell Colab và danh sách artifact cần đưa lên Drive. Code CUDA mới chỉ
+  được test bằng mock/local; parity thật trên T4 chưa chạy nên production gate vẫn đóng.
+- Verification local: doctor `offline-local` PASS, targeted 19/19, toàn suite 58/58,
+  compile PASS và `git diff --check` sạch.
+
+### [24/08/2026] Phiên #7
+- Thêm `docs/SHOT_DETECTION_RUNBOOK.md` làm hướng dẫn vận hành chuẩn cho đồng đội: checkout,
+  bootstrap, data layout, doctor, chạy một video/danh sách, reference validation, batch
+  report và quy tắc bàn giao artifact.
+- Liên kết runbook từ root/offline README và environment setup. Bổ sung contract trong
+  `AGENTS.md`: mọi CLI/workflow/artifact mới phải cập nhật hướng dẫn sử dụng trong cùng
+  thay đổi, ghi rõ phần đã/chưa được xác minh trước khi push.
 
 ### [24/08/2026] Phiên #6
 - Chuẩn bị handoff trên branch `codex/offline-shot-detection`: bổ sung chuỗi lệnh E2E một

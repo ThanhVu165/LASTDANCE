@@ -38,6 +38,9 @@ offline pipeline**, không suy đoán, không tự sáng tác schema mới:
 **Nếu code hiện tại lệch với spec → sửa code theo spec, không sửa spec theo code**, trừ khi
 người dùng xác nhận rõ ràng đây là thay đổi có chủ đích (và phải ghi vào Changelog của spec).
 
+Nếu vận hành hoặc sửa Shot Detection, đọc thêm `docs/SHOT_DETECTION_RUNBOOK.md` trước khi
+chạy batch.
+
 ---
 
 ## 3. Phạm vi phiên làm việc này (Nhánh 1 — Offline Indexing)
@@ -81,8 +84,11 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 
 ## 5. Môi trường vận hành thực tế — Kaggle + HuggingFace Dataset
 
-- **Preprocessing (shot detection, keyframe extraction, dedup)** → chạy **local CPU**, tiết
-  kiệm GPU quota Kaggle.
+- **Keyframe extraction + dedup** → chạy **local CPU**. Shot Detection mặc định vẫn chạy
+  CPU local, nhưng được phép chia sang **Colab CUDA** khi dùng đúng cùng commit/config và
+  toàn bộ 5 video dev-subset đã qua parity 100% từng shot/range với manifest CPU. CUDA phải
+  được chọn tường minh, ghi provenance và fail closed; tuyệt đối không fallback âm thầm về
+  CPU.
 - **Embedding (CLIP/SigLIP/BEiT-3) + OCR fallback (EasyOCR)** → chạy **Kaggle GPU theo
   batch**. Quota Kaggle free: **30h/tuần** — Nhánh 1 và Nhánh 3 (ASR) dùng **2 tài khoản
   Kaggle/Colab riêng biệt**, không tranh chấp quota với nhau.
@@ -155,3 +161,15 @@ Trước khi code, Codex nên tự trả lời (và nói rõ trong phản hồi)
 2. Input/output chính xác là gì, khớp schema nào trong `shared/schemas/`?
 3. Chạy ở đâu — local CPU hay Kaggle GPU? Có đụng tới quota GPU không?
 4. Có điều kiện nào trong Publishing Criteria (§6 ở trên) liên quan đến task này không?
+
+---
+
+## 10. Handoff và tài liệu vận hành
+
+- Mọi CLI, dependency, artifact contract hoặc workflow mới phải cập nhật hướng dẫn sử dụng
+  cho đồng đội trong **cùng thay đổi/commit**; không chỉ giao code.
+- Hướng dẫn phải ghi rõ input/output, môi trường CPU/GPU, lệnh setup/run/validate, cách
+  resume, file được bàn giao và file không được commit.
+- Workflow chuyên biệt phải có runbook trong `docs/` và được liên kết từ README liên quan.
+- Trước khi push, chạy lại các lệnh trong hướng dẫn trên môi trường mục tiêu hoặc ghi rõ phần
+  nào mới chỉ là planned/chưa được xác minh.

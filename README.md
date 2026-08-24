@@ -14,6 +14,8 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
 4. [`docs/ASR_SPEC.md`](docs/ASR_SPEC.md) - data contract Nhánh 3.
 5. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) - trạng thái triển khai thực tế.
 6. [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) - môi trường Windows/Kaggle.
+7. [`docs/SHOT_DETECTION_RUNBOOK.md`](docs/SHOT_DETECTION_RUNBOOK.md) - chạy và bàn giao
+   TransNetV2 giữa nhiều máy.
 
 Các tài liệu window-first cũ được giữ lại làm lịch sử, không còn là runtime instruction.
 

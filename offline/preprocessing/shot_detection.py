@@ -23,6 +23,32 @@ TRANSNETV2_PYTORCH_BUNDLED_WEIGHTS_SHA256 = (
 )
 TRANSITION_EXCLUSION_REASON = "transition_score_above_threshold"
 DEFAULT_TRANSITION_EXCLUSION_WARNING_THRESHOLD = 0.01
+DEFAULT_TRANSNETV2_DEVICE = "cpu"
+SUPPORTED_TRANSNETV2_DEVICES = frozenset({"cpu", "cuda"})
+
+
+def normalize_transnetv2_device(device: str) -> str:
+    normalized = str(device).strip().lower()
+    if normalized not in SUPPORTED_TRANSNETV2_DEVICES:
+        choices = ", ".join(sorted(SUPPORTED_TRANSNETV2_DEVICES))
+        raise ValueError(f"TransNetV2 device must be one of: {choices}")
+    return normalized
+
+
+def ensure_transnetv2_device_available(device: str) -> str:
+    """Reject unavailable CUDA explicitly; never fall back to CPU silently."""
+
+    normalized = normalize_transnetv2_device(device)
+    if normalized == "cuda":
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError("CUDA Shot Detection requires PyTorch") from exc
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "TransNetV2 device=cuda was requested but CUDA is unavailable"
+            )
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +165,7 @@ class TransNetV2ShotDetector(ShotDetector):
         model_dir: Path | None = None,
         model_factory: Callable[[], Any] | None = None,
         threshold: float = 0.5,
+        device: str = DEFAULT_TRANSNETV2_DEVICE,
     ) -> None:
         self._weights_path = Path(weights_path) if weights_path is not None else None
         self._expected_weights_sha256 = expected_weights_sha256
@@ -147,6 +174,7 @@ class TransNetV2ShotDetector(ShotDetector):
         if not 0.0 < threshold < 1.0:
             raise ValueError("threshold must be between 0 and 1")
         self._threshold = float(threshold)
+        self._device = normalize_transnetv2_device(device)
         self._model: Any | None = None
         self._weights_sha256: str | None = None
         self._weights_source: str | None = None
@@ -155,6 +183,7 @@ class TransNetV2ShotDetector(ShotDetector):
     def _load_model(self) -> Any:
         if self._model is not None:
             return self._model
+        ensure_transnetv2_device_available(self._device)
         if self._model_factory is not None:
             self._model = self._model_factory()
             self._weights_source = "injected-model-factory"
@@ -163,6 +192,10 @@ class TransNetV2ShotDetector(ShotDetector):
         try:
             from transnetv2_pytorch import TransNetV2
         except ImportError:
+            if self._device != "cpu":
+                raise RuntimeError(
+                    "device=cuda requires the transnetv2-pytorch implementation"
+                )
             return self._load_legacy_tensorflow_model()
 
         resolved_weights, actual_sha256, weights_source = (
@@ -180,8 +213,12 @@ class TransNetV2ShotDetector(ShotDetector):
             resolve_and_verify_transnetv2_weights()
 
         try:
-            self._model = TransNetV2(device="cpu")
-        except TypeError:
+            self._model = TransNetV2(device=self._device)
+        except TypeError as exc:
+            if self._device != "cpu":
+                raise RuntimeError(
+                    "installed TransNetV2 implementation does not support device=cuda"
+                ) from exc
             self._model = TransNetV2()
 
         if weights_source == "external":
@@ -252,7 +289,7 @@ class TransNetV2ShotDetector(ShotDetector):
                 else "transnetv2-pytorch"
             ),
             "package_version": self._package_version,
-            "device": "cpu",
+            "device": self._device,
             "threshold": self._threshold,
             "weights_source": self._weights_source,
             "weights_sha256": self._weights_sha256,
@@ -399,11 +436,13 @@ def get_default_shot_detector(
     weights_path: Path | None = None,
     expected_weights_sha256: str | None = None,
     model_dir: Path | None = None,
+    device: str = DEFAULT_TRANSNETV2_DEVICE,
 ) -> ShotDetector:
     return TransNetV2ShotDetector(
         weights_path=weights_path,
         expected_weights_sha256=expected_weights_sha256,
         model_dir=model_dir,
+        device=device,
     )
 
 

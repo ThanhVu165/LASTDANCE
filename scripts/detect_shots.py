@@ -8,6 +8,7 @@ from pathlib import Path
 
 from offline.config import DataLayout
 from offline.preprocessing.shot_detection import (
+    DEFAULT_TRANSNETV2_DEVICE,
     get_default_shot_detector,
     write_shot_manifest_atomic,
 )
@@ -20,6 +21,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weights", type=Path)
     parser.add_argument("--weights-sha256")
     parser.add_argument("--model-dir", type=Path)
+    parser.add_argument(
+        "--device",
+        choices=("cpu", "cuda"),
+        help=(
+            "explicit inference device; defaults to AIC_TRANSNETV2_DEVICE or cpu, "
+            "and never falls back silently"
+        ),
+    )
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -38,10 +47,15 @@ def main() -> int:
     weights_sha256 = args.weights_sha256 or os.environ.get(
         "AIC_TRANSNETV2_WEIGHTS_SHA256"
     )
+    device = args.device or os.environ.get(
+        "AIC_TRANSNETV2_DEVICE",
+        DEFAULT_TRANSNETV2_DEVICE,
+    )
     detector = get_default_shot_detector(
         weights_path=weights_path,
         expected_weights_sha256=weights_sha256,
         model_dir=args.model_dir,
+        device=device,
     )
     detection = detector.detect(source)
     output = args.output or (layout.shots / f"{source.stem}.json")

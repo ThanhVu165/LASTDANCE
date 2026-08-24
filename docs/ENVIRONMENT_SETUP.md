@@ -9,6 +9,7 @@ có environment riêng và không được trộn dependency vào `.venv-offline
 |---|---|---|
 | Dev | `requirements/dev.txt` | schema và unit test, không tải model |
 | Offline local | `requirements/offline-local.txt` | inventory, shot detection CPU, filter, FAISS |
+| Shot Colab GPU | `requirements/shot-colab-gpu.txt` | TransNetV2 CUDA, giữ Torch có sẵn của Colab |
 | Kaggle GPU | `requirements/kaggle-gpu.txt` | CLIP/SigLIP/BEiT-3 batch embedding |
 
 Không cài profile Kaggle lên máy local chỉ để chạy preprocessing. Kaggle đã có PyTorch khớp
@@ -97,6 +98,14 @@ xử lý video và kiểm tra weight này bằng SHA-256 cố định
 tạo model. Package version, threshold, device, source và weight SHA phải xuất hiện trong
 shot manifest.
 
+CPU là default. Colab CUDA chỉ được bật tường minh bằng `--device cuda` hoặc
+`AIC_TRANSNETV2_DEVICE=cuda`; nếu CUDA không sẵn sàng pipeline dừng, không fallback về CPU.
+Trước khi chia production batch, phải so từng boundary và excluded range của cả 5 video
+dev-subset với reference CPU theo runbook.
+
+Quy trình checkout, chạy một video, chia batch và bàn giao manifest nằm trong
+`docs/SHOT_DETECTION_RUNBOOK.md`.
+
 Chỉ khi cần thử external weight override:
 
 1. tải/chia sẻ qua kênh nội bộ hợp lệ;
@@ -118,6 +127,16 @@ python -m scripts.environment_doctor --profile kaggle-gpu
 Ghi vào batch report: Python, package version, `torch.__version__`, CUDA, GPU, model ID,
 revision, dtype, dimension, pixel/config signature và peak VRAM. Không push vector nếu chưa
 ép `float16`.
+
+Shot Detection trên Colab dùng profile và doctor riêng, không dùng profile embedding:
+
+```bash
+python -m pip install -r requirements/shot-colab-gpu.txt
+python -m scripts.environment_doctor --profile shot-colab-gpu
+```
+
+Các cell clone repo, parity gate và batch command đầy đủ nằm trong
+`docs/SHOT_DETECTION_RUNBOOK.md`.
 
 ## 6. Khóa môi trường theo platform
 

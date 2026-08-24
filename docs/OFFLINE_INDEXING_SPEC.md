@@ -25,7 +25,10 @@
 
 ## 1. Tầng Phân đoạn & Trích chọn (Preprocessing Stage)
 
-Chạy **Local CPU** — tiết kiệm GPU quota Kaggle cho tầng embedding.
+Keyframe extraction và lọc chạy **Local CPU**. Shot Detection mặc định CPU local; được phép
+chia sang Colab CUDA nếu dùng đúng cùng commit/config/weight và qua parity gate 100% từng
+boundary/range trên đủ 5 video dev-subset. CUDA phải chọn tường minh, ghi provenance và
+không được fallback âm thầm về CPU.
 
 | Bước | Model/Thư viện | Hành động | Output |
 |---|---|---|---|
@@ -231,3 +234,7 @@ Kaggle Notebook (build) --push_to_hub()--> HF Dataset (Git LFS) --snapshot_downl
   trong `excluded_transition_ranges` với lý do `transition_score_above_threshold`, kèm tổng
   số/tỷ lệ frame bị loại. Validator chỉ cảnh báo, không fail, khi tỷ lệ này vượt 1% để phát
   hiện threshold quá nhạy; mọi lỗi range, overlap hoặc coverage accounting vẫn fail closed.
+- **24/08/2026 (bản 5)** — Cho phép TransNetV2 Shot Detection chạy Colab CUDA với adapter
+  production của repo. CPU vẫn là default; chỉ chia batch sau parity 100% từng boundary và
+  `excluded_transition_ranges` trên đủ 5 video dev-subset, dùng cùng commit/config/weight.
+  Device/runtime phải có provenance và CUDA thiếu phải fail closed, không tự chạy CPU.

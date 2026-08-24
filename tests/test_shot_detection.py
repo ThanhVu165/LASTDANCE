@@ -3,6 +3,7 @@ import unittest
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from offline.preprocessing.shot_detection import (
     ExcludedTransitionRange,
@@ -58,6 +59,34 @@ class ShotDetectionTests(unittest.TestCase):
         self.assertTrue(model.quiet)
         self.assertEqual(model.threshold, 0.5)
         self.assertEqual(detector.signature["weights_source"], "injected-model-factory")
+        self.assertEqual(detector.signature["device"], "cpu")
+
+    def test_cuda_device_is_explicit_and_recorded(self):
+        detector = TransNetV2ShotDetector(
+            model_factory=FakeTransNetModel,
+            device="cuda",
+        )
+        with patch("torch.cuda.is_available", return_value=True):
+            detection = detector.detect(Path("video.mp4"))
+
+        self.assertEqual(len(detection.shots), 2)
+        self.assertEqual(detector.signature["device"], "cuda")
+
+    def test_cuda_device_never_falls_back_when_unavailable(self):
+        detector = TransNetV2ShotDetector(
+            model_factory=FakeTransNetModel,
+            device="cuda",
+        )
+        with patch("torch.cuda.is_available", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "CUDA is unavailable"):
+                detector.detect(Path("video.mp4"))
+
+    def test_unknown_device_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "must be one of"):
+            TransNetV2ShotDetector(
+                model_factory=FakeTransNetModel,
+                device="auto",
+            )
 
     def test_overlapping_boundaries_fail_closed(self):
         class OverlappingModel(FakeTransNetModel):
