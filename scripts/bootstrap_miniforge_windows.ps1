@@ -1,12 +1,16 @@
 param(
     [string]$EnvironmentPath = ".venv-offline",
     [string]$ToolchainRoot = "",
-    [ValidateSet("dev", "offline-local")]
+    [ValidateSet("dev", "offline-local", "shot-windows-gpu")]
     [string]$Profile = "offline-local"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($Profile -eq "shot-windows-gpu" -and -not $PSBoundParameters.ContainsKey("EnvironmentPath")) {
+    $EnvironmentPath = ".venv-shot-gpu"
+}
 
 # Pin both the installer and its digest so a new machine cannot silently receive a
 # different bootstrap runtime. Miniforge itself must use a path without spaces because
@@ -21,12 +25,16 @@ $repoPrefix = $repoRoot + [IO.Path]::DirectorySeparatorChar
 $toolsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot ".tools"))
 $downloadRoot = [IO.Path]::GetFullPath((Join-Path $toolsRoot "downloads"))
 $environmentPrefix = [IO.Path]::GetFullPath((Join-Path $repoRoot $EnvironmentPath))
-$environmentFile = if ($Profile -eq "dev") {
-    Join-Path $repoRoot "environment.dev.yml"
-} else {
-    Join-Path $repoRoot "environment.yml"
+$environmentFile = switch ($Profile) {
+    "dev" { Join-Path $repoRoot "environment.dev.yml" }
+    "shot-windows-gpu" { Join-Path $repoRoot "environment.shot-windows-gpu.yml" }
+    default { Join-Path $repoRoot "environment.yml" }
 }
 $installerPath = Join-Path $downloadRoot $installerName
+
+if ($Profile -eq "shot-windows-gpu") {
+    & (Join-Path $PSScriptRoot "check_nvidia_windows.ps1")
+}
 
 if ([string]::IsNullOrWhiteSpace($ToolchainRoot)) {
     $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
@@ -97,13 +105,13 @@ function Invoke-CondaChecked {
 Push-Location $repoRoot
 try {
     if (Test-Path -LiteralPath (Join-Path $environmentPrefix "python.exe") -PathType Leaf) {
-        Write-Host "Updating the existing repo-local environment from environment.yml..."
+        Write-Host "Updating the existing repo-local environment from $environmentFile..."
         Invoke-CondaChecked @(
             "env", "update", "--prefix", $environmentPrefix,
             "--file", $environmentFile
         )
     } else {
-        Write-Host "Creating the repo-local Python 3.11 + FFmpeg environment..."
+        Write-Host "Creating the repo-local Python 3.11 + FFmpeg environment from $environmentFile..."
         Invoke-CondaChecked @(
             "env", "create", "--prefix", $environmentPrefix,
             "--file", $environmentFile, "--yes"
@@ -114,7 +122,7 @@ try {
         "run", "--no-capture-output", "--prefix", $environmentPrefix,
         "python", "-m", "scripts.environment_doctor", "--profile", $Profile
     )
-    if ($Profile -eq "offline-local") {
+    if ($Profile -in @("offline-local", "shot-windows-gpu")) {
         $doctorArguments += "--skip-data"
     }
     Invoke-CondaChecked $doctorArguments
@@ -134,4 +142,4 @@ Write-Host "Bootstrap complete. Activate with:"
 Write-Host "  & '$miniforgePrefix\shell\condabin\conda-hook.ps1'"
 Write-Host "  conda activate '$environmentPrefix'"
 Write-Host "Or run a module without activation:"
-Write-Host "  .\scripts\run_offline_windows.ps1 -Module scripts.environment_doctor -PythonArguments @('--profile','offline-local')"
+Write-Host "  .\scripts\run_offline_windows.ps1 -EnvironmentPath '$EnvironmentPath' -Module scripts.environment_doctor -PythonArguments @('--profile','$Profile')"

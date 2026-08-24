@@ -6,6 +6,7 @@ Target runtime is CPython 3.11.9. Do not install every profile into one environm
 |---|---|---|
 | `dev.txt` | schema/unit tests, no model | any CPU machine |
 | `offline-local.txt` | inventory, TransNetV2 CPU, filtering, FAISS build | local Windows/Linux |
+| `shot-windows-gpu.txt` | TransNetV2 CUDA 12.6, Torch 2.12.1 | Windows NVIDIA GPU |
 | `shot-colab-gpu.txt` | TransNetV2 CUDA shot detection, giữ Torch có sẵn | Google Colab T4 |
 | `kaggle-gpu.txt` | CLIP/SigLIP/BEiT-3 batch embedding | Kaggle GPU |
 
@@ -16,8 +17,9 @@ khuyến nghị upstream. Nếu máy đã có CPython 3.11 + FFmpeg thì dùng
 `scripts/bootstrap_windows.ps1`.
 
 Bootstrap mặc định cài profile `offline-local`. Dùng `-Profile dev -EnvironmentPath
-.venv-dev` cho môi trường nhẹ. Không dùng chung một environment giữa profile local CPU và
-Kaggle GPU.
+.venv-dev` cho môi trường nhẹ. Worker Shot Detection Windows GPU dùng `-Profile
+shot-windows-gpu`; bootstrap tự tạo `.venv-shot-gpu`. Không dùng chung environment CPU,
+Windows GPU và Kaggle GPU.
 
 `ffmpeg` and `ffprobe` are system binaries, not Python packages. The environment doctor
 checks both executables and their versions.
@@ -27,6 +29,9 @@ replacing it from a generic requirements file can silently break GPU support. Ru
 after installation and record `torch`, CUDA and GPU information in the batch report.
 Colab Shot Detection phải dùng `shot-colab-gpu.txt`, chọn `--device cuda` tường minh và qua
 parity gate trong `docs/SHOT_DETECTION_RUNBOOK.md` trước khi chạy batch thật.
+Windows GPU dùng wheel chính thức `torch==2.12.1+cu126` từ PyTorch CUDA 12.6 index. Không
+cần cài CUDA Toolkit hệ thống, nhưng NVIDIA driver phải hỗ trợ CUDA 12.x; preflight yêu cầu
+driver tối thiểu 528.33 rồi doctor vẫn kiểm tra `torch.cuda.is_available()`.
 
 `transnetv2-pytorch==1.0.5` bundles its default weight; the pipeline pins and verifies that
 file's SHA-256 before model construction. `AIC_TRANSNETV2_WEIGHTS` and

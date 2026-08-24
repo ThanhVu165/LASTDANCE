@@ -1,14 +1,15 @@
 # Runbook Shot Detection bằng TransNetV2
 
-Tài liệu này dành cho thành viên chạy bước **1.1 Shot Detection** của Nhánh 1 trên Windows
-CPU hoặc Google Colab CUDA. Đây là hướng dẫn vận hành chuẩn: luôn chạy code từ repository,
-không copy hoặc viết lại `predictions_to_scenes()` trong notebook/script riêng.
+Tài liệu này dành cho thành viên chạy bước **1.1 Shot Detection** của Nhánh 1. Worker
+production ưu tiên Windows NVIDIA GPU; CPU giữ làm reference/fallback và Colab CUDA là lựa
+chọn phụ. Luôn chạy code từ repository, không copy hoặc viết lại
+`predictions_to_scenes()` trong notebook/script riêng.
 
 ## 1. Phạm vi và contract
 
 - Input: MP4 tại `AIC_DATA/videos/<video_id>.mp4`.
 - Output: shot manifest schema v2 tại `AIC_DATA/shots/<video_id>.json`.
-- CPU local là default. Colab CUDA chỉ dùng sau parity gate đủ 5 video ở mục 9.
+- CPU là reference. Windows/Colab CUDA chỉ dùng production sau parity gate đủ 5 video.
 - Model: `transnetv2-pytorch==1.0.5`.
 - Threshold: `0.5`, so sánh strict `prediction > threshold`.
 - Tham số nội bộ package: input `48x27`, `window_size=100`, `step_size=50`, overlap 50,
@@ -48,23 +49,30 @@ git rev-parse HEAD
 Hai worker chỉ được gộp artifact khi chạy cùng commit. Nếu Pull Request đã merge, dùng
 `main` mới nhất nhưng vẫn phải ghi chính xác commit SHA.
 
-## 3. Dựng môi trường Windows CPU
+## 3. Dựng môi trường Windows NVIDIA GPU
 
-Từ root repository:
+Từ root repository, kiểm tra GPU/driver trước:
 
 ```powershell
-.\scripts\bootstrap_miniforge_windows.ps1
+.\scripts\check_nvidia_windows.ps1
 ```
 
-Script dựng `.venv-offline`, cài Python 3.11.9, FFmpeg/ffprobe 7.1.1, Torch 2.12.1,
-`transnetv2-pytorch==1.0.5`, kiểm tra weight rồi chạy compile/test. Không cần tải weight
-thủ công.
+Driver phải từ 528.33 trở lên; nên cập nhật driver NVIDIA mới và reboot. Không cần cài CUDA
+Toolkit hệ thống. Sau khi preflight PASS:
+
+```powershell
+.\scripts\bootstrap_miniforge_windows.ps1 -Profile shot-windows-gpu
+```
+
+Script tự tạo environment riêng `.venv-shot-gpu`, cài Python 3.11.9, FFmpeg/ffprobe 7.1.1,
+wheel chính thức `torch==2.12.1+cu126`, `transnetv2-pytorch==1.0.5`, kiểm tra CUDA/weight rồi
+chạy compile và toàn bộ unit test. Không đè hoặc dùng lại `.venv-offline` CPU.
 
 Nếu PowerShell chặn script:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\bootstrap_miniforge_windows.ps1
+.\scripts\bootstrap_miniforge_windows.ps1 -Profile shot-windows-gpu
 ```
 
 ## 4. Chuẩn bị dữ liệu
@@ -89,29 +97,33 @@ $env:AIC_DATA = "D:\AIC2026"
 
 Sai: `$env:AIC_DATA = "D:\AIC2026\videos"`.
 
-## 5. Kiểm tra môi trường Windows
+## 5. Kiểm tra môi trường Windows GPU
 
 ```powershell
 .\scripts\run_offline_windows.ps1 `
+  -EnvironmentPath ".venv-shot-gpu" `
   -Module scripts.environment_doctor `
-  -PythonArguments @("--profile", "offline-local")
+  -PythonArguments @("--profile", "shot-windows-gpu")
 ```
 
-Chỉ tiếp tục khi Python, FFmpeg/ffprobe, Torch, TransNetV2 và weight SHA-256 đều `PASS`.
+Chỉ tiếp tục khi Python, FFmpeg/ffprobe, Torch, TransNetV2, CUDA/GPU và weight SHA-256 đều
+`PASS`. Nếu CUDA fail, dừng; không chạy cùng lệnh bằng CPU rồi trộn kết quả.
 
-## 6. Chạy một video CPU
+## 6. Parity Windows GPU bắt buộc
+
+Đồng đội cần có 5 manifest CPU reference trong một thư mục riêng, không đặt chung với output
+GPU. Chạy đủ 5 MP4 bằng CUDA vào namespace parity:
 
 ```powershell
 .\scripts\run_offline_windows.ps1 `
-  -Module scripts.detect_shots `
+  -EnvironmentPath ".venv-shot-gpu" `
+  -Module scripts.run_shot_batch `
   -PythonArguments @(
-    "$env:AIC_DATA\videos\L21_V001.mp4",
-    "--device", "cpu"
+    ".\configs\shot_parity_dev_subset_5.txt",
+    "--device", "cuda",
+    "--shots-dir", "$env:AIC_DATA\index\shot-parity-windows-gpu"
   )
 ```
-
-Manifest phải có schema v2, signature đầy đủ, shot tăng dần/không overlap,
-`excluded_transition_ranges` và coverage validation.
 
 Reference trên máy chuẩn:
 
@@ -123,7 +135,26 @@ Reference trên máy chuẩn:
 | `L21_V005` | 28.294 | 248 | `[57,57]` |
 | `L21_V006` | 31.064 | 268 | `[0,0]`, `[1063,1063]` |
 
-Chỉ nhận khi cùng MP4 cho ra đúng toàn bộ boundary/range, không chỉ cùng số shot.
+So sánh từng manifest. Sửa `$cpuReferenceDir` thành nơi đồng đội lưu 5 JSON CPU:
+
+```powershell
+$cpuReferenceDir = "D:\AIC2026\cpu-reference"
+$gpuParityDir = "$env:AIC_DATA\index\shot-parity-windows-gpu"
+$parityIds = Get-Content .\configs\shot_parity_dev_subset_5.txt
+
+foreach ($videoId in $parityIds) {
+    .\scripts\run_offline_windows.ps1 `
+      -EnvironmentPath ".venv-shot-gpu" `
+      -Module scripts.compare_shot_manifests `
+      -PythonArguments @(
+        "$cpuReferenceDir\$videoId.json",
+        "$gpuParityDir\$videoId.json"
+      )
+}
+```
+
+Cả 5 phải `PASS` đúng toàn bộ boundary/range, không chỉ cùng số shot. Lệch một frame thì
+dừng, giữ report để điều tra và không treo production batch.
 
 ## 7. Chạy batch được phân công
 
@@ -135,17 +166,19 @@ L21_V008
 L21_V009
 ```
 
-Windows CPU:
+Windows NVIDIA GPU:
 
 ```powershell
 .\scripts\run_offline_windows.ps1 `
+  -EnvironmentPath ".venv-shot-gpu" `
   -Module scripts.run_shot_batch `
-  -PythonArguments @(".\worker-01.txt", "--device", "cpu")
+  -PythonArguments @(".\worker-01.txt", "--device", "cuda")
 ```
 
 Batch runner dùng một model cho cả danh sách, kiểm tra manifest cũ trước khi skip, ghi từng
 manifest atomic và tiếp tục video kế tiếp nếu một video lỗi. `--fail-fast` dùng khi muốn dừng
-ngay; `--overwrite` chỉ dùng khi chủ động chạy lại artifact cũ.
+ngay; `--overwrite` chỉ dùng khi chủ động chạy lại artifact cũ. Chạy lại đúng lệnh sau khi
+mất điện/restart sẽ skip manifest GPU tương thích và tiếp tục phần còn thiếu.
 
 Mỗi worker nhận tập ID không giao nhau. Không cho hai worker ghi cùng manifest.
 
@@ -167,7 +200,24 @@ Report ghi commit, runtime Python/Torch/CUDA/FFmpeg, detector signature, ID thà
 và lỗi. Bàn giao các manifest cùng batch report. Không gửi/commit MP4, environment, weight,
 cache, raw prediction, log, JPEG hoặc vector.
 
-## 9. Colab CUDA: cần đưa những gì lên
+Manifest trong `index/shot-parity-windows-gpu/` chỉ dùng kiểm tra; không bàn giao thay cho
+manifest production đã được phân công.
+
+## 9. Checklist trước khi treo máy qua đêm
+
+1. Cắm sạc; đặt Windows **Sleep = Never khi plugged in**. Khóa màn hình được, nhưng máy
+   không được sleep/hibernate. Nếu gập laptop, đặt hành động đóng nắp là **Do nothing**.
+2. Đóng game, LM Studio và process dùng GPU. Không chạy embedding/Qwen cùng lúc.
+3. Xác nhận 5/5 parity PASS và `worker-01.txt` không giao ID với worker khác.
+4. Chạy batch không có `--fail-fast` để một video lỗi không làm dừng cả đêm.
+5. Có thể mở PowerShell khác chạy `nvidia-smi -l 10` để theo dõi GPU/VRAM/nhiệt độ.
+6. Sáng hôm sau đọc batch report; mọi `failures` phải chạy lại hoặc chuyển CPU có ghi rõ,
+   tuyệt đối không coi là hoàn tất ngầm.
+
+Nếu GPU hết VRAM ở video dài, runner ghi failure và tiếp tục video sau. Không thêm fallback
+CPU tự động vì sẽ làm provenance trong cùng batch không còn đồng nhất.
+
+## 10. Colab CUDA (lựa chọn phụ)
 
 Không upload source `.py` và không dán hàm hậu xử lý vào notebook. Colab clone nguyên repo;
 weight có sẵn trong wheel và được pipeline kiểm SHA-256.
@@ -196,7 +246,7 @@ MyDrive/
     └── L21_V006.json
 ```
 
-### 9.1 Bật GPU và clone repo
+### 10.1 Bật GPU và clone repo
 
 Trong Colab chọn **Runtime → Change runtime type → T4 GPU**, sau đó:
 
@@ -213,7 +263,7 @@ drive.mount("/content/drive")
 
 Commit SHA phải trùng worker CPU.
 
-### 9.2 Cài và kiểm tra môi trường
+### 10.2 Cài và kiểm tra môi trường
 
 ```bash
 !python -m pip install -r requirements/shot-colab-gpu.txt
@@ -225,7 +275,7 @@ Commit SHA phải trùng worker CPU.
 Doctor phải báo CUDA available, đúng package 1.0.5 và đúng weight SHA. Không cài
 `requirements/offline-local.txt` trên Colab vì profile đó pin Torch CPU/local.
 
-### 9.3 Parity gate bắt buộc trước batch 873 video
+### 10.3 Parity gate bắt buộc trước batch 873 video
 
 Chạy 5 video bằng adapter của repo:
 
@@ -257,7 +307,7 @@ Cả 5 lệnh phải `PASS`. Bộ so sánh cho phép field `device` khác CPU/CU
 shot boundary, excluded range, threshold, implementation, package version và weight hash
 khớp. Chỉ lệch một frame cũng phải dừng; không sửa JSON và không chạy batch production.
 
-### 9.4 Chạy danh sách Colab sau khi parity PASS
+### 10.4 Chạy danh sách Colab sau khi parity PASS
 
 ```bash
 !python -m scripts.run_shot_batch "$AIC_DATA/worker-colab.txt" --device cuda

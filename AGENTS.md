@@ -84,11 +84,11 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 
 ## 5. Môi trường vận hành thực tế — Kaggle + HuggingFace Dataset
 
-- **Keyframe extraction + dedup** → chạy **local CPU**. Shot Detection mặc định vẫn chạy
-  CPU local, nhưng được phép chia sang **Colab CUDA** khi dùng đúng cùng commit/config và
-  toàn bộ 5 video dev-subset đã qua parity 100% từng shot/range với manifest CPU. CUDA phải
-  được chọn tường minh, ghi provenance và fail closed; tuyệt đối không fallback âm thầm về
-  CPU.
+- **Keyframe extraction + dedup** → chạy **local CPU**. Shot Detection giữ CPU làm reference
+  nhưng production batch được phép chạy **Windows NVIDIA GPU hoặc Colab CUDA** khi dùng đúng
+  cùng commit/config và toàn bộ 5 video dev-subset đã qua parity 100% từng shot/range với
+  manifest CPU. CUDA phải được chọn tường minh, ghi provenance và fail closed; tuyệt đối
+  không fallback âm thầm về CPU.
 - **Embedding (CLIP/SigLIP/BEiT-3) + OCR fallback (EasyOCR)** → chạy **Kaggle GPU theo
   batch**. Quota Kaggle free: **30h/tuần** — Nhánh 1 và Nhánh 3 (ASR) dùng **2 tài khoản
   Kaggle/Colab riêng biệt**, không tranh chấp quota với nhau.

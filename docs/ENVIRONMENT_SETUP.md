@@ -9,6 +9,7 @@ có environment riêng và không được trộn dependency vào `.venv-offline
 |---|---|---|
 | Dev | `requirements/dev.txt` | schema và unit test, không tải model |
 | Offline local | `requirements/offline-local.txt` | inventory, shot detection CPU, filter, FAISS |
+| Shot Windows GPU | `requirements/shot-windows-gpu.txt` | TransNetV2 CUDA 12.6, Torch 2.12.1 |
 | Shot Colab GPU | `requirements/shot-colab-gpu.txt` | TransNetV2 CUDA, giữ Torch có sẵn của Colab |
 | Kaggle GPU | `requirements/kaggle-gpu.txt` | CLIP/SigLIP/BEiT-3 batch embedding |
 
@@ -98,13 +99,31 @@ xử lý video và kiểm tra weight này bằng SHA-256 cố định
 tạo model. Package version, threshold, device, source và weight SHA phải xuất hiện trong
 shot manifest.
 
-CPU là default. Colab CUDA chỉ được bật tường minh bằng `--device cuda` hoặc
-`AIC_TRANSNETV2_DEVICE=cuda`; nếu CUDA không sẵn sàng pipeline dừng, không fallback về CPU.
+CPU là reference/default. Windows hoặc Colab CUDA chỉ được bật tường minh bằng
+`--device cuda` hoặc `AIC_TRANSNETV2_DEVICE=cuda`; nếu CUDA không sẵn sàng pipeline dừng,
+không fallback về CPU.
 Trước khi chia production batch, phải so từng boundary và excluded range của cả 5 video
 dev-subset với reference CPU theo runbook.
 
 Quy trình checkout, chạy một video, chia batch và bàn giao manifest nằm trong
 `docs/SHOT_DETECTION_RUNBOOK.md`.
+
+### Windows NVIDIA GPU
+
+Không cài CUDA wheel vào `.venv-offline`. Dùng profile tách biệt:
+
+```powershell
+.\scripts\check_nvidia_windows.ps1
+.\scripts\bootstrap_miniforge_windows.ps1 -Profile shot-windows-gpu
+```
+
+Bootstrap tự chọn `.venv-shot-gpu`, cài wheel chính thức `torch==2.12.1+cu126` và chạy
+doctor/test. Driver NVIDIA tối thiểu là 528.33 cho CUDA 12.x minor compatibility; nên cập
+nhật driver mới rồi reboot trước khi bootstrap. CUDA Toolkit hệ thống không bắt buộc vì
+wheel PyTorch mang CUDA runtime cần thiết.
+
+Nguồn version: [PyTorch previous versions](https://pytorch.org/get-started/previous-versions/)
+và [NVIDIA CUDA 12.6 compatibility](https://docs.nvidia.com/cuda/archive/12.6.0/cuda-toolkit-release-notes/index.html).
 
 Chỉ khi cần thử external weight override:
 

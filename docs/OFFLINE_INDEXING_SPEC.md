@@ -25,10 +25,10 @@
 
 ## 1. Tầng Phân đoạn & Trích chọn (Preprocessing Stage)
 
-Keyframe extraction và lọc chạy **Local CPU**. Shot Detection mặc định CPU local; được phép
-chia sang Colab CUDA nếu dùng đúng cùng commit/config/weight và qua parity gate 100% từng
-boundary/range trên đủ 5 video dev-subset. CUDA phải chọn tường minh, ghi provenance và
-không được fallback âm thầm về CPU.
+Keyframe extraction và lọc chạy **Local CPU**. Shot Detection dùng CPU làm reference; batch
+production được phép chạy Windows NVIDIA GPU hoặc Colab CUDA nếu dùng đúng cùng
+commit/config/weight và qua parity gate 100% từng boundary/range trên đủ 5 video dev-subset.
+CUDA phải chọn tường minh, ghi provenance và không được fallback âm thầm về CPU.
 
 | Bước | Model/Thư viện | Hành động | Output |
 |---|---|---|---|
@@ -238,3 +238,7 @@ Kaggle Notebook (build) --push_to_hub()--> HF Dataset (Git LFS) --snapshot_downl
   production của repo. CPU vẫn là default; chỉ chia batch sau parity 100% từng boundary và
   `excluded_transition_ranges` trên đủ 5 video dev-subset, dùng cùng commit/config/weight.
   Device/runtime phải có provenance và CUDA thiếu phải fail closed, không tự chạy CPU.
+- **24/08/2026 (bản 6)** — Cho phép dùng Windows NVIDIA GPU làm worker Shot Detection chính
+  để treo batch dài. Environment CUDA phải tách khỏi `.venv-offline` CPU; production vẫn bị
+  khóa bởi parity đủ 5 video và mọi nguyên tắc cùng commit/config/weight, provenance,
+  fail-closed của bản 5.

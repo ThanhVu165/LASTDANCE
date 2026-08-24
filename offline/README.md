@@ -75,9 +75,9 @@ Chỉ truyền `--blur-threshold`/`--phash-max-distance` sau khi chốt ngưỡn
 luôn giữ ít nhất một keyframe/shot. `build_frames_catalog` chỉ nhận plan + quality manifest
 khớp SHA và không được dùng catalog smoke/partial làm production index.
 
-Inventory/keyframe/dedup là local-CPU. Shot detection mặc định CPU, có đường chạy Colab CUDA
-fail-closed sau parity gate 5 video. Các bước CLIP/SigLIP/BEiT-3 chưa được chạy hoặc tải
-model trong lát cắt này.
+Inventory/keyframe/dedup là local-CPU. Shot detection dùng CPU làm reference và có worker
+Windows/Colab CUDA fail-closed sau parity gate 5 video. Các bước CLIP/SigLIP/BEiT-3 chưa
+được chạy hoặc tải model trong lát cắt này.
 
 ## Handoff shot detection giữa nhiều máy
 

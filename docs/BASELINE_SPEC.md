@@ -74,7 +74,7 @@ không hardcode path tuyệt đối trong bất kỳ file JSON/CSV nào.
 ```
 video (.mp4)
   └─> [1] Inventory & EDA (đọc thật FPS/resolution/duration, không giả định)
-  └─> [2] Shot Boundary Detection (CPU local mặc định; Colab CUDA sau parity gate)
+  └─> [2] Shot Boundary Detection (CPU reference; Windows/Colab CUDA sau parity gate)
   └─> [3] Trích 3 keyframe/shot (Begin - Middle - End)
   └─> [4] Hậu lọc:
           - Laplacian Variance -> loại khung mờ
@@ -101,7 +101,7 @@ audio (.wav tách từ video)
 | # | Bước | Input | Output | Thư viện/model | Ghi chú |
 |---|---|---|---|---|---|
 | 1 | Inventory | video thô | bảng FPS/res/duration thật | `ffprobe` | Không giả định giá trị |
-| 2 | Shot detection | video | manifest v2 gồm shot + transition range | AutoShot / TransNetV2 port tạm thời | CPU mặc định; Colab CUDA chỉ sau parity 100% trên dev-subset |
+| 2 | Shot detection | video | manifest v2 gồm shot + transition range | AutoShot / TransNetV2 port tạm thời | CPU reference; Windows/Colab CUDA chỉ sau parity 100% trên dev-subset |
 | 3 | Keyframe extraction | shot list | ảnh keyframe (jpg) | `ffmpeg` | 3/shot |
 | 4 | Dedup/quality | keyframe | keyframe đã lọc | OpenCV (Laplacian), pHash | Threshold cần benchmark trên dev subset |
 | 5 | Visual embedding | keyframe | vector CLIP + SigLIP + BEiT-3 | HuggingFace transformers | Batch processing, chạy trên Kaggle GPU |
@@ -315,7 +315,7 @@ ngay khi model sẵn sàng, không phải sửa lại signature giữa chừng t
 |---|---|---|---|---|
 | Query planning (primary) | Gemini 2.5 Flash-Lite | Cloud API | 0 MB | Cần internet |
 | Query planning (fallback) | Qwen3-VL-2B-Instruct | Local GPU, 4-bit | ~1.8 GB | Load/release theo pha |
-| Shot detection (offline) | AutoShot / TransNetV2 port tạm thời | Local CPU hoặc Colab T4 | Ghi theo batch report | CUDA chọn tường minh, không fallback; phải qua parity gate CPU–CUDA |
+| Shot detection (offline) | AutoShot / TransNetV2 port tạm thời | Local CPU, Windows NVIDIA GPU hoặc Colab T4 | Ghi theo batch report | CUDA chọn tường minh, không fallback; phải qua parity gate CPU–CUDA |
 | Frame recall baseline | CLIP ViT-B/32 | Local/Kaggle | ~300 MB | Rollback an toàn |
 | Frame recall nâng cao | SigLIP + BEiT-3 | Kaggle GPU (offline) | N/A (chạy batch, không online) | Build index nền |
 | OCR (primary) | Gemini 2.5 Flash-Lite | Cloud API | 0 MB | |
@@ -412,3 +412,7 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
   device/runtime provenance, fail closed khi CUDA thiếu và chỉ được chạy production sau khi
   từng shot boundary + `excluded_transition_ranges` khớp 100% với reference CPU trên đủ 5
   video dev-subset. Không copy/reimplement hậu xử lý trong notebook.
+- **24/08/2026 (bản 6)** — Chuyển worker Shot Detection của đồng đội từ CPU sang NVIDIA GPU
+  trên Windows để chạy batch dài. Dùng environment CUDA tách biệt, CPU chỉ làm reference;
+  vẫn bắt buộc parity 5/5, provenance và fail closed như Colab. Không overwrite environment
+  CPU hoặc tự fallback khi driver/CUDA/VRAM không đáp ứng.

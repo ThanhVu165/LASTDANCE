@@ -92,6 +92,27 @@ class EnvironmentDoctorTests(unittest.TestCase):
         self.assertTrue(cuda.ok)
         self.assertEqual(cuda.detail, "Tesla T4")
 
+    def test_windows_shot_profile_requires_cuda(self):
+        with patch("scripts.environment_doctor.check_python") as python_check, patch(
+            "scripts.environment_doctor.check_package"
+        ) as package_check, patch(
+            "scripts.environment_doctor.check_executable"
+        ) as executable_check, patch(
+            "scripts.environment_doctor.check_transnet_weights",
+            return_value=[],
+        ), patch("torch.cuda.is_available", return_value=True), patch(
+            "torch.cuda.get_device_name",
+            return_value="NVIDIA GeForce RTX 4050 Laptop GPU",
+        ):
+            python_check.return_value.ok = True
+            package_check.return_value.ok = True
+            executable_check.return_value.ok = True
+            checks = collect_checks("shot-windows-gpu", {}, check_data=False)
+
+        cuda = next(check for check in checks if check.name == "cuda")
+        self.assertTrue(cuda.ok)
+        self.assertIn("RTX 4050", cuda.detail)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -102,6 +102,13 @@ def read_video_ids(path: Path) -> list[str]:
     return video_ids
 
 
+def resolve_shots_directory(layout: DataLayout, configured: Path | None) -> Path:
+    destination = configured.resolve() if configured else layout.shots
+    if not destination.is_relative_to(layout.root):
+        raise ValueError("--shots-dir must stay inside AIC_DATA")
+    return destination
+
+
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -146,6 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weights-sha256")
     parser.add_argument("--model-dir", type=Path)
     parser.add_argument("--device", choices=("cpu", "cuda"))
+    parser.add_argument(
+        "--shots-dir",
+        type=Path,
+        help="manifest output directory; defaults to AIC_DATA/shots",
+    )
     parser.add_argument("--report", type=Path)
     parser.add_argument(
         "--overwrite",
@@ -203,6 +215,7 @@ def main() -> int:
         model_dir=args.model_dir,
         device=device,
     )
+    shots_directory = resolve_shots_directory(layout, args.shots_dir)
     report_path = args.report or (
         layout.index / "shot-batches" / f"{args.video_list.stem}.json"
     )
@@ -222,7 +235,7 @@ def main() -> int:
     for video_id in video_ids:
         source = layout.videos / f"{video_id}.mp4"
         relative_video_path = f"videos/{video_id}.mp4"
-        output = layout.shots / f"{video_id}.json"
+        output = shots_directory / f"{video_id}.json"
         try:
             if not source.is_file():
                 raise RuntimeError(f"video file is missing for {video_id}")
