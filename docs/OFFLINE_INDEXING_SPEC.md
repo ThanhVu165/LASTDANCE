@@ -242,3 +242,7 @@ Kaggle Notebook (build) --push_to_hub()--> HF Dataset (Git LFS) --snapshot_downl
   để treo batch dài. Environment CUDA phải tách khỏi `.venv-offline` CPU; production vẫn bị
   khóa bởi parity đủ 5 video và mọi nguyên tắc cùng commit/config/weight, provenance,
   fail-closed của bản 5.
+- **24/08/2026 (bản 7)** — Khóa vận hành distributed Shot Detection: unit test không được
+  thay parity CUDA thật; Windows phải reboot sau update driver rồi mới preflight. Mọi worker
+  Windows/Colab phải có người + phạm vi ID trong registry `CURRENT_STATUS.md`, hai tập không
+  giao nhau; worker chưa phân công/disabled không được chạy production.

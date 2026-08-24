@@ -60,6 +60,41 @@ wire vào dispatch logic mới.
 - Không chạy được toàn bộ backend test trong môi trường hiện tại vì thiếu `fastapi` và
   `opencv-python`; đây là dependency-environment blocker, không phải regression đã quan sát.
 
+## Gate production Shot Detection Windows GPU
+
+**BLOCKED — parity Windows GPU thật chưa chạy.** `60/60 test PASS` là unit test
+local/mock/CPU path, không thay thế inference CUDA thật trên đúng 5 MP4 dev-subset. Không
+được chạy `worker-01.txt` production trước khi toàn bộ bảng sau PASS:
+
+| Điều kiện | Trạng thái đã xác minh |
+|---|---|
+| Driver mới đã cài, Windows đã reboot và `check_nvidia_windows.ps1` hậu-reboot PASS | CHƯA XÁC MINH |
+| Doctor `.venv-shot-gpu` báo CUDA/GPU/weight PASS | CHƯA XÁC MINH |
+| `L21_V001` exact manifest compare CPU–GPU | CHƯA CHẠY |
+| `L21_V002` exact manifest compare CPU–GPU | CHƯA CHẠY |
+| `L21_V003` exact manifest compare CPU–GPU | CHƯA CHẠY |
+| `L21_V005` exact manifest compare CPU–GPU | CHƯA CHẠY |
+| `L21_V006` exact manifest compare CPU–GPU | CHƯA CHẠY |
+
+Exact compare bao gồm từng shot boundary và mọi `excluded_transition_ranges`; không được
+chỉ so shot count. Lệch một transition frame có thể làm keyframe plan/mapping
+`keyframe_uid → frame_id` khác nhau và phá join `frames.csv` về sau.
+
+## Điều phối worker Shot Detection
+
+Đây là registry bắt buộc trước khi chạy phân tán. Hiện chưa có tên người/phạm vi ID cụ thể,
+do đó cả hai worker đều chưa được phép khởi chạy production:
+
+| Worker | Người phụ trách | File phân công | Phạm vi video ID | Trạng thái |
+|---|---|---|---|---|
+| Windows NVIDIA GPU | Đồng đội — chưa cung cấp tên | `worker-01.txt` | CHƯA CHỐT | BLOCKED bởi parity + phân công |
+| Colab CUDA | CHƯA PHÂN CÔNG | `worker-colab.txt` | CHƯA CHỐT | DISABLED |
+
+Trước khi start, người điều phối phải thay `CHƯA...` bằng tên người và phạm vi/list ID thật,
+đối chiếu hai tập có giao nhau hay không, rồi ghi kết quả tại đây. Colab không tự được bật
+chỉ vì code vẫn còn trong repo. Hai batch report có cùng `video_id` phải bị xem là xung đột,
+không merge tự động.
+
 ### Handoff triển khai 24/08/2026
 
 - Working tree đang có thay đổi chưa commit cho pivot frame-level; không có thay đổi nào
@@ -207,6 +242,17 @@ wire vào dispatch logic mới.
 2. Build CLIP/SigLIP/BEiT-3 embedding theo batch trên Kaggle, output float16 có signature.
 3. Build ba FAISS `IndexIDMap` độc lập và diff UID với dev `frames.csv`.
 4. Chạy ground-truth A/B trước khi bật blur/pHash filter hoặc đổi detector.
+
+### [24/08/2026] Phiên #10
+- Ghi production gate Windows GPU thành BLOCKED rõ ràng: 60/60 unit test không phải parity
+  CUDA thật; cả 5 video hiện đều `CHƯA CHẠY` exact compare.
+- Bổ sung yêu cầu reboot bắt buộc sau update driver rồi mới rerun preflight/doctor; thêm lại
+  điều kiện này vào checklist treo máy.
+- Thêm registry điều phối Windows/Colab. Vì chưa có tên người và phạm vi ID từ người dùng,
+  Windows vẫn blocked và Colab disabled; cấm khởi chạy cho tới khi hai tập ID được ghi rõ,
+  xác nhận không giao nhau.
+- Nhấn mạnh exact compare phải gồm `excluded_transition_ranges`; lệch transition frame có
+  thể làm mapping keyframe/UID khác và phá join `frames.csv`.
 
 ### [24/08/2026] Phiên #9
 - Theo quyết định mới, chuyển worker Shot Detection của đồng đội từ CPU sang Windows NVIDIA

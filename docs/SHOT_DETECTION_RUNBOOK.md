@@ -57,8 +57,10 @@ Từ root repository, kiểm tra GPU/driver trước:
 .\scripts\check_nvidia_windows.ps1
 ```
 
-Driver phải từ 528.33 trở lên; nên cập nhật driver NVIDIA mới và reboot. Không cần cài CUDA
-Toolkit hệ thống. Sau khi preflight PASS:
+Driver phải từ 528.33 trở lên. Nếu cần cập nhật driver: cài driver mới, **reboot Windows bắt
+buộc**, mở lại repo rồi chạy lại `check_nvidia_windows.ps1`. Không tiếp tục chỉ vì installer
+báo thành công khi máy chưa reboot. Không cần cài CUDA Toolkit hệ thống. Chỉ sau khi
+preflight hậu-reboot PASS mới bootstrap:
 
 ```powershell
 .\scripts\bootstrap_miniforge_windows.ps1 -Profile shot-windows-gpu
@@ -111,6 +113,10 @@ Chỉ tiếp tục khi Python, FFmpeg/ffprobe, Torch, TransNetV2, CUDA/GPU và w
 
 ## 6. Parity Windows GPU bắt buộc
 
+> **Trạng thái hiện tại: CHƯA CHẠY PARITY WINDOWS GPU THẬT.** Kết quả `60/60 unit test PASS`
+> chỉ xác minh code local/mock, không chứng minh CUDA trên máy đồng đội cho cùng boundary.
+> Production gate vẫn đóng cho tới khi cả 5 phép so sánh dưới đây PASS thật.
+
 Đồng đội cần có 5 manifest CPU reference trong một thư mục riêng, không đặt chung với output
 GPU. Chạy đủ 5 MP4 bằng CUDA vào namespace parity:
 
@@ -153,8 +159,10 @@ foreach ($videoId in $parityIds) {
 }
 ```
 
-Cả 5 phải `PASS` đúng toàn bộ boundary/range, không chỉ cùng số shot. Lệch một frame thì
-dừng, giữ report để điều tra và không treo production batch.
+Cả 5 phải `PASS` đúng từng shot boundary và toàn bộ `excluded_transition_ranges`, không chỉ
+cùng số shot. Lệch một frame transition có thể làm keyframe plan/mapping
+`keyframe_uid → frame_id` khác nhau và phá join `frames.csv` ở bước sau. Dừng, giữ report để
+điều tra và không treo production batch. Không được suy diễn parity từ `60/60 unit test`.
 
 ## 7. Chạy batch được phân công
 
@@ -180,7 +188,10 @@ manifest atomic và tiếp tục video kế tiếp nếu một video lỗi. `--f
 ngay; `--overwrite` chỉ dùng khi chủ động chạy lại artifact cũ. Chạy lại đúng lệnh sau khi
 mất điện/restart sẽ skip manifest GPU tương thích và tiếp tục phần còn thiếu.
 
-Mỗi worker nhận tập ID không giao nhau. Không cho hai worker ghi cùng manifest.
+Mỗi worker nhận tập ID không giao nhau. Trước khi chạy, kiểm tra bảng **Điều phối worker Shot
+Detection** trong `docs/CURRENT_STATUS.md`: người phụ trách, file list và phạm vi ID phải được
+điền rõ. Không khởi chạy worker còn `CHƯA PHÂN CÔNG`/`DISABLED`; không cho Windows và Colab
+ghi cùng manifest.
 
 ## 8. Output và bàn giao
 
@@ -205,19 +216,25 @@ manifest production đã được phân công.
 
 ## 9. Checklist trước khi treo máy qua đêm
 
-1. Cắm sạc; đặt Windows **Sleep = Never khi plugged in**. Khóa màn hình được, nhưng máy
+1. Nếu vừa cập nhật driver: reboot Windows, rồi chạy lại `check_nvidia_windows.ps1` và doctor;
+   cả hai phải PASS trước khi làm bước khác.
+2. Cắm sạc; đặt Windows **Sleep = Never khi plugged in**. Khóa màn hình được, nhưng máy
    không được sleep/hibernate. Nếu gập laptop, đặt hành động đóng nắp là **Do nothing**.
-2. Đóng game, LM Studio và process dùng GPU. Không chạy embedding/Qwen cùng lúc.
-3. Xác nhận 5/5 parity PASS và `worker-01.txt` không giao ID với worker khác.
-4. Chạy batch không có `--fail-fast` để một video lỗi không làm dừng cả đêm.
-5. Có thể mở PowerShell khác chạy `nvidia-smi -l 10` để theo dõi GPU/VRAM/nhiệt độ.
-6. Sáng hôm sau đọc batch report; mọi `failures` phải chạy lại hoặc chuyển CPU có ghi rõ,
+3. Đóng game, LM Studio và process dùng GPU. Không chạy embedding/Qwen cùng lúc.
+4. Xác nhận **5 phép compare thật đều PASS**; không thay bằng kết quả unit test.
+5. Xác nhận bảng điều phối đã có người/ID và `worker-01.txt` không giao với worker Colab.
+6. Chạy batch không có `--fail-fast` để một video lỗi không làm dừng cả đêm.
+7. Có thể mở PowerShell khác chạy `nvidia-smi -l 10` để theo dõi GPU/VRAM/nhiệt độ.
+8. Sáng hôm sau đọc batch report; mọi `failures` phải chạy lại hoặc chuyển CPU có ghi rõ,
    tuyệt đối không coi là hoàn tất ngầm.
 
 Nếu GPU hết VRAM ở video dài, runner ghi failure và tiếp tục video sau. Không thêm fallback
 CPU tự động vì sẽ làm provenance trong cùng batch không còn đồng nhất.
 
 ## 10. Colab CUDA (lựa chọn phụ)
+
+Colab mặc định **DISABLED**. Chỉ khởi chạy khi bảng điều phối trong `CURRENT_STATUS.md` đã ghi
+người phụ trách và phạm vi ID không giao với Windows GPU.
 
 Không upload source `.py` và không dán hàm hậu xử lý vào notebook. Colab clone nguyên repo;
 weight có sẵn trong wheel và được pipeline kiểm SHA-256.

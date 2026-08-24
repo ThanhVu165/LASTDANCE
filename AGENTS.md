@@ -173,3 +173,6 @@ Trước khi code, Codex nên tự trả lời (và nói rõ trong phản hồi)
 - Workflow chuyên biệt phải có runbook trong `docs/` và được liên kết từ README liên quan.
 - Trước khi push, chạy lại các lệnh trong hướng dẫn trên môi trường mục tiêu hoặc ghi rõ phần
   nào mới chỉ là planned/chưa được xác minh.
+- Trước khi chạy Shot Detection phân tán, bảng **Điều phối worker Shot Detection** trong
+  `docs/CURRENT_STATUS.md` phải ghi người phụ trách + phạm vi ID cho từng worker và các tập ID
+  phải không giao nhau. Worker còn `CHƯA PHÂN CÔNG`/`DISABLED` tuyệt đối không được khởi chạy.
