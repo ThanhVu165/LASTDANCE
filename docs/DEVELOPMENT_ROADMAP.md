@@ -1,7 +1,7 @@
 # Lộ trình phát triển LASTDANCE
 
-> **ARCHIVED 24/08/2026:** Roadmap này đã bị thay thế bởi checklist triển khai trong
-> `BASELINE_SPEC.md` và phạm vi Nhánh 1 trong `OFFLINE_INDEXING_SPEC.md`.
+> **ARCHIVED 24/08/2026:** Roadmap này đã bị thay thế bởi checklist và contract trong
+> `BASELINE_SPEC.md`, nguồn chuẩn kỹ thuật duy nhất.
 
 Lộ trình này thay thế toàn bộ plan/checkpoint cũ. Mỗi milestone phải có baseline,
 ground truth và điều kiện rollback; không đổi production chỉ vì một model mới tải

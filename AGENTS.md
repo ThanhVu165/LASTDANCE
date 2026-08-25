@@ -26,14 +26,9 @@
 
 ## 2. Nguồn chuẩn duy nhất (Source of Truth)
 
-Ba file sau nằm ở `docs/` trong repo — **PHẢI đọc cả 3 trước khi sửa code liên quan đến
-offline pipeline**, không suy đoán, không tự sáng tác schema mới:
-
-1. `docs/BASELINE_SPEC.md` — tổng thể toàn hệ thống (offline + online + fusion).
-2. `docs/OFFLINE_INDEXING_SPEC.md` — chi tiết Nhánh 1 (phạm vi làm việc chính của Codex
-   trong repo này).
-3. `docs/ASR_SPEC.md` — chi tiết Nhánh 3, chạy độc lập, chỉ cần biết **data contract**
-   (`asr.sqlite`) để không phá vỡ format khi Nhánh 2 tích hợp.
+Chỉ có **một** nguồn chuẩn kỹ thuật: `docs/BASELINE_SPEC.md`. File này chứa toàn bộ
+contract Offline, ASR và Online. Runbook/status/roadmap chỉ hướng dẫn vận hành hoặc ghi tiến
+độ, không được tạo schema hay quyết định kiến trúc khác baseline.
 
 **Nếu code hiện tại lệch với spec → sửa code theo spec, không sửa spec theo code**, trừ khi
 người dùng xác nhận rõ ràng đây là thay đổi có chủ đích (và phải ghi vào Changelog của spec).
@@ -51,7 +46,7 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 **dừng lại và báo cáo**, không tự sửa chéo nhánh.
 
 ### Việc thuộc phạm vi:
-- `offline/` — AutoShot shot detection, keyframe extraction, dedup/lọc nhiễu, visual
+- `offline/` — TransNetV2 shot detection, keyframe extraction, dedup/lọc nhiễu, visual
   embedding (CLIP/SigLIP/BEiT-3), OCR (Gemini + EasyOCR fallback), build FAISS + SQLite FTS5.
 - `shared/schemas/` — Pydantic schema dùng chung (`FrameRecord`, `OcrResult`, `AsrSegment`)
   — sửa ở đây ảnh hưởng cả 2 nhánh, cần cẩn trọng và thông báo khi đổi.
@@ -65,12 +60,13 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 2. **`keyframe_uid`** là khóa nội dung (deterministic hash `blake2b` từ
    `video_id:shot_id:local_idx`) dùng cho FAISS/OCR/ASR — **không dùng vị trí insert
    (`faiss_row_id`/row index)** làm khóa. Xem công thức chính xác ở
-   `OFFLINE_INDEXING_SPEC.md` §3.2a.
+   `docs/BASELINE_SPEC.md` §2.1d.
 3. **`local_idx`** chỉ dùng nội bộ để trỏ file ảnh (`{video_id}/{shot_id}_{local_idx}.jpg`)
    — không dùng làm khóa nộp bài hay dedup.
 4. **Không hardcode path tuyệt đối** — mọi path build từ biến môi trường `AIC_DATA`
    (default `data/`).
-5. **Không giả định FPS/resolution/duration** — luôn đọc thật từ `ffprobe` (bước Inventory).
+5. **Không giả định FPS/resolution/duration** — phải chạy Inventory full bằng `ffprobe`
+   trước Shot Detection; `--limit` chỉ dùng smoke với output riêng, không publish.
 6. **Không giả định VRAM vô hạn** — 6GB VRAM local, phải ghi rõ ước tính và cơ chế
    load/release model theo pha nếu chạy local.
 7. **Vector bắt buộc ép `float16`** trước khi lưu/push (giảm dung lượng + băng thông HF).
@@ -121,17 +117,13 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 
 ## 7. Rủi ro đã biết — KHÔNG cần re-investigate, đã có quyết định
 
-- **AutoShot model weight chỉ có trên Baidu Netdisk** (không có trên GitHub Release/Google
-  Drive, cần passcode). Repo gốc `wentaozhu/AutoShot` không có `pip install` sẵn, không có
-  script inference đơn giản cho 1 video — chỉ có script eval trên benchmark SHOT dataset,
-  cần tự viết wrapper inference riêng cho 873 video của tụi mình.
-  **Trạng thái hiện tại: đang thử tải Baidu trước.** Nếu không tải được trong thời gian hợp
-  lý, phương án dự phòng đã bàn: **TransNetV2** (có pip package + weight GitHub, dễ triển
-  khai hơn, AutoShot chỉ hơn ~4.2% F1 trên benchmark riêng của họ — không phải chênh lệch
-  bắt buộc phải theo bằng mọi giá). Runtime dev hiện dùng `transnetv2-pytorch==1.0.5`, là
-  port PyTorch bên thứ ba chứ không phải TensorFlow SavedModel gốc của tác giả. Khi A/B với
-  AutoShot phải ghi rõ đây là AutoShot gốc so với TransNetV2 port; không dùng kết quả này để
-  suy ngược hoặc xác nhận chênh lệch F1 trong paper giữa hai implementation gốc.
+- **Shot detector production đã chốt là TransNetV2.** Không tiếp tục chờ weight AutoShot,
+  không làm A/B AutoShot trên critical path và không đổi detector nếu chưa có quyết định mới
+  từ người dùng. Runtime dùng `transnetv2-pytorch==1.0.5`, là port PyTorch bên thứ ba chứ
+  không phải TensorFlow SavedModel gốc của tác giả. CPU giữ vai trò reference/fallback;
+  production ưu tiên Windows NVIDIA GPU sau parity 5/5. Mỗi worker phải dùng checkpoint
+  signature-aware và chỉ đánh dấu xong video sau khi manifest schema v2 đã atomic-publish và
+  validate lại thành công.
 - **EasyOCR full 873 video có thể không kịp 6 ngày** — ưu tiên Gemini API OCR trước,
   EasyOCR chạy nền song song làm fallback, không chặn critical path.
 - **Thể lệ AIC 2026 có internet trong phòng thi hay không — CHƯA XÁC NHẬN.** Ảnh hưởng trực
@@ -148,16 +140,16 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
   khỏi scope Nhánh 3 để kịp deadline.
 - Không tự ý build thêm 1 visual index đã gộp sẵn (SRRF) ở Nhánh 1 — việc gộp 3 điểm
   CLIP/SigLIP/BEiT-3 thành `score_visual` là việc của Nhánh 2 lúc query, không phải lúc index.
-- Không đổi tên cột SQL giữa `ocr.sqlite` và `asr.sqlite` mà không đối chiếu cả 2 spec —
-  hai bảng phải giữ cấu trúc song song (`detected_text` vs `transcribed_text`) để Nhánh 2
-  dùng chung 1 module `FtsSearcher`.
+- Không đổi tên cột SQL giữa `ocr.sqlite` và `asr.sqlite` trái
+  `docs/BASELINE_SPEC.md` §2.1d/§2A.3; giữ `detected_text` và `transcribed_text` để Nhánh 2
+  dùng chung một module `FtsSearcher`.
 
 ---
 
 ## 9. Khi bắt đầu 1 task cụ thể trong phiên này
 
 Trước khi code, Codex nên tự trả lời (và nói rõ trong phản hồi):
-1. Task này thuộc bước nào trong pipeline (`OFFLINE_INDEXING_SPEC.md` §1–3)?
+1. Task này thuộc bước nào trong pipeline (`docs/BASELINE_SPEC.md` §2–§3)?
 2. Input/output chính xác là gì, khớp schema nào trong `shared/schemas/`?
 3. Chạy ở đâu — local CPU hay Kaggle GPU? Có đụng tới quota GPU không?
 4. Có điều kiện nào trong Publishing Criteria (§6 ở trên) liên quan đến task này không?

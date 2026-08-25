@@ -1,11 +1,11 @@
 # LASTDANCE — Baseline Hợp Nhất (AIC 2026)
 
-> Tài liệu này là **nguồn chuẩn duy nhất** cho việc code. Mọi module code (offline/online)
-> phải tuân theo đúng schema, interface và luồng xử lý mô tả ở đây. Nếu code và tài liệu
-> lệch nhau, sửa code theo tài liệu, không sửa ngược lại — trừ khi có quyết định mới được
-> ghi bổ sung vào mục "Changelog" ở cuối file.
+> Đây là **nguồn chuẩn kỹ thuật duy nhất** cho Offline, ASR và Online. Runbook/status chỉ mô
+> tả cách vận hành hoặc tiến độ, không được định nghĩa schema/contract khác file này. Nếu code
+> và tài liệu lệch nhau, sửa code theo tài liệu, trừ khi quyết định mới của người dùng được
+> ghi vào Changelog. Hai spec tách nhánh cũ đã được hợp nhất và xóa để tránh lệch phiên bản.
 
-**Cập nhật:** 23/08/2026
+**Cập nhật:** 24/08/2026
 **Thời gian còn lại:** 6 ngày
 **Máy tham chiếu:** Intel i5-12450H, RTX 4050 Laptop 6 GiB VRAM, Windows/Kaggle/Colab, Python 3.11
 
@@ -32,6 +32,9 @@
    3 FAISS index là 3 nguồn điểm riêng, phải gộp về **1** điểm `score_visual` duy nhất trước
    (xem `§3.2` tầng 1) rồi mới đưa vào Late Fusion liên-modal (`§3.2` tầng 2) — nhầm bước này
    sẽ làm sai trọng số `modality_weights["visual"]`.
+9. **Inventory bằng `ffprobe` là bước bắt buộc trước Shot Detection full collection.**
+   Chạy lại khi thêm/thay MP4 hoặc khi inventory thiếu/stale; không cần chạy lại nếu tập nguồn
+   không đổi và `inventory.json` còn hợp lệ. Không publish inventory chạy với `--limit`.
 
 ---
 
@@ -46,9 +49,9 @@ file này để lấy timestamp/frame chuẩn.
 | `local_idx` | int | Vị trí keyframe nội bộ — chỉ dùng để đọc file JPG/OCR cache, **không** dùng làm khóa nộp bài |
 | `frame_id` | int | Chỉ số frame thật trong MP4 — dùng cho preview và submission |
 | `pts_time` | float | Timestamp chuẩn (giây) — trục join giữa các modality |
-| `shot_id` | str | Định danh shot (từ AutoShot) |
+| `shot_id` | str | Định danh shot (từ TransNetV2) |
 | `window_id` | str \| null | Định danh video-window (nếu dùng window-based retrieval) |
-| `keyframe_uid` | int | Khóa deterministic (hash), dùng chung cho FAISS/OCR/ASR — xem `OFFLINE_INDEXING_SPEC.md` mục 3.2a |
+| `keyframe_uid` | int | Khóa deterministic BLAKE2b, dùng chung cho FAISS/OCR/ASR — xem §2.1d |
 
 ```python
 # shared/schemas/frame.py
@@ -79,7 +82,7 @@ video (.mp4)
   └─> [4] Hậu lọc:
           - Laplacian Variance -> loại khung mờ
           - pHash / Cosine similarity > 0.9 -> loại khung gần trùng
-  └─> [5] Dual-embedding cho MỖI keyframe (không mean-pool):
+  └─> [5] Ba visual embedding cho MỖI keyframe (không mean-pool):
           - CLIP ViT-B/32 (baseline / rollback)
           - SigLIP (câu mô tả dài)
           - BEiT-3 (chi tiết vùng ảnh nhỏ)
@@ -91,7 +94,7 @@ video (.mp4)
 
 [Nhánh 3 — song song, người phụ trách riêng, tài khoản Kaggle/Colab riêng]
 audio (.wav tách từ video)
-  └─> [8] ASR: Whisper Large-v3 / phoWhisper (tiếng Việt) — xem chi tiết ASR_SPEC.md
+  └─> [8] ASR: Whisper Large-v3 / phoWhisper (tiếng Việt) — xem §2A
   └─> [9] Temporal Alignment: map segment → keyframe_uid gần nhất theo pts_time
   └─> [10] Ghi vào asr.sqlite (SQLite FTS5) — cùng cấu trúc với ocr.sqlite
 ```
@@ -101,15 +104,164 @@ audio (.wav tách từ video)
 | # | Bước | Input | Output | Thư viện/model | Ghi chú |
 |---|---|---|---|---|---|
 | 1 | Inventory | video thô | bảng FPS/res/duration thật | `ffprobe` | Không giả định giá trị |
-| 2 | Shot detection | video | manifest v2 gồm shot + transition range | AutoShot / TransNetV2 port tạm thời | CPU reference; Windows/Colab CUDA chỉ sau parity 100% trên dev-subset |
+| 2 | Shot detection | video | manifest v2 gồm shot + transition range | TransNetV2 (`transnetv2-pytorch==1.0.5`) | GPU production sau parity 100% trên dev-subset; CPU reference/fallback |
 | 3 | Keyframe extraction | shot list | ảnh keyframe (jpg) | `ffmpeg` | 3/shot |
 | 4 | Dedup/quality | keyframe | keyframe đã lọc | OpenCV (Laplacian), pHash | Threshold cần benchmark trên dev subset |
 | 5 | Visual embedding | keyframe | vector CLIP + SigLIP + BEiT-3 | HuggingFace transformers | Batch processing, chạy trên Kaggle GPU |
 | 6 | OCR | keyframe | text + bbox | Gemini API / EasyOCR | JSON prompt schema cố định — xem 2.2 |
 | 7 | Indexing | vector + text | FAISS index, SQLite FTS5, frames.csv | `faiss-cpu`, `sqlite3` | IndexFlatIP, chuẩn hóa L2 trước khi add |
-| 8 | ASR (nhánh 3, song song) | audio `.wav` | segment + timestamp | Whisper Large-v3 / phoWhisper | Xem `ASR_SPEC.md`, chạy trên Kaggle/Colab account riêng, không tranh quota với nhánh 1 |
+| 8 | ASR (nhánh 3, song song) | audio `.wav` | segment + timestamp | Whisper Large-v3 / phoWhisper | Xem §2A; chạy trên Kaggle/Colab account riêng, không tranh quota với nhánh 1 |
+### 2.1a Inventory/EDA bằng `ffprobe` — bắt buộc
 
-### 2.2 JSON schema OCR prompt (Gemini) — schema chuẩn, dùng chung với `OFFLINE_INDEXING_SPEC.md`
+Inventory là bản kiểm kê metadata nguồn, không phải index và không sinh keyframe. Bước này
+chạy **local CPU**, không dùng quota GPU.
+
+- Input: video được tìm đệ quy dưới `AIC_DATA/videos/`.
+- Output production: `AIC_DATA/index/inventory.json`, ghi atomic, `schema_version = 1`.
+- Mỗi record: `video_id`, `relative_path`, `width`, `height`, `fps`, `duration`,
+  `frame_count` (có thể `null` nếu container không khai báo) và `has_audio`.
+- `fps`, resolution và duration phải đọc từ stream/format thật; thiếu video stream, FPS,
+  duration hoặc resolution hợp lệ thì fail closed.
+- `relative_path` phải nằm dưới `AIC_DATA`; `video_id` không được trùng.
+
+Lệnh production, chạy **không có `--limit`**:
+
+```powershell
+$env:AIC_DATA = "D:\AIC2026"
+.\scripts\run_offline_windows.ps1 `
+  -Module scripts.build_inventory
+```
+
+Chạy Inventory một lần trước Shot Detection full collection. Chạy lại nếu thêm, xóa, thay
+nội dung/metadata hoặc đổi tên MP4; không cần chạy lại khi tập nguồn không đổi và
+`inventory.json` còn đúng. `--limit` chỉ dùng smoke với `--output` riêng; nếu dùng
+`--limit` cùng output mặc định, file tạo ra chỉ là inventory một phần và **không được
+publish**.
+
+Schema rút gọn:
+
+```json
+{
+  "schema_version": 1,
+  "videos": [
+    {
+      "video_id": "L21_V001",
+      "relative_path": "videos/L21_V001.mp4",
+      "width": 1280,
+      "height": 720,
+      "fps": 25.0,
+      "duration": 1513.96,
+      "frame_count": 37849,
+      "has_audio": true
+    }
+  ]
+}
+```
+
+### 2.1b Shot Detection — TransNetV2 production
+
+- Input: `AIC_DATA/videos/<video_id>.mp4`; Inventory của collection phải có trước.
+- Model: `transnetv2-pytorch==1.0.5`, threshold `0.5`, weight SHA-256
+  `a313d0b3bebfa9a71914b375bfdf918a30b5c3b1e6be51972d35dd8078b442de`.
+- Windows NVIDIA GPU là worker production sau parity 5/5; CPU là reference/fallback; Colab
+  CUDA là worker phụ. CUDA phải chọn tường minh và không được fallback âm thầm.
+- Output: `AIC_DATA/shots/<video_id>.json`, manifest schema v2, atomic publish.
+- Provenance bắt buộc: implementation, package version, device, threshold, weight source/hash.
+- Checkpoint riêng theo worker/device/output namespace: ghi `0/1` trước inference, chỉ ghi
+  `1/1` sau atomic publish và validation. Ngắt giữa inference chạy lại video hiện tại;
+  manifest hợp lệ đã publish được adopt; complete state thiếu/hỏng manifest phải fail closed.
+
+Manifest phải chứa shot tăng dần, không overlap và mọi frame transition nằm ngoài shot:
+
+```json
+{
+  "schema_version": 2,
+  "video_id": "L21_V001",
+  "relative_video_path": "videos/L21_V001.mp4",
+  "detector": "transnetv2",
+  "detector_signature": {
+    "implementation": "transnetv2-pytorch",
+    "package_version": "1.0.5",
+    "device": "cuda",
+    "threshold": 0.5,
+    "weights_sha256": "a313d0..."
+  },
+  "shots": [
+    {"shot_id": "s000000", "start_frame": 0, "end_frame": 48}
+  ],
+  "excluded_transition_ranges": [
+    {
+      "start_frame": 49,
+      "end_frame": 49,
+      "reason": "transition_score_above_threshold"
+    }
+  ],
+  "transition_exclusion_validation": {
+    "total_frame_count": 31720,
+    "excluded_frame_count": 1,
+    "excluded_frame_fraction": 0.0000315,
+    "warning_threshold": 0.01,
+    "exceeds_warning_threshold": false
+  }
+}
+```
+
+Các range transition phải khớp chính xác phần bù giữa các shot. Accounting/range sai phải
+fail closed; tỷ lệ loại vượt 1% chỉ phát warning để kiểm tra threshold. Keyframe planner
+không được chọn frame thuộc `excluded_transition_ranges`.
+
+### 2.1c Keyframe extraction và quality/dedup
+
+- Trích tối đa 3 keyframe/shot: Begin, Middle, End bằng FFmpeg và timestamp/frame thật.
+- Tên file: `{video_id}/{shot_id}_{local_idx}.jpg`; `local_idx` chỉ định vị JPEG.
+- Không dùng `frame_id` để đặt tên file và không dùng `local_idx` làm khóa submission.
+- Lọc mờ bằng Laplacian variance; dedup pHash/cosine chỉ trong cùng shot.
+- Threshold production phải được benchmark; luôn giữ ít nhất một keyframe/shot.
+- Không xóa JPEG nguồn trong bước report/filter; artifact selection phải có signature.
+- Checkpoint/resume phải giữ thứ tự canonical của plan, không sort lại theo `frame_id` hay
+  `local_idx`.
+
+### 2.1d `keyframe_uid`, embedding và index
+
+`keyframe_uid` là khóa deterministic chung cho `frames.csv`, ba FAISS index, OCR và ASR:
+
+```python
+import hashlib
+
+def make_keyframe_uid(video_id: str, shot_id: str, local_idx: int) -> int:
+    raw = f"{video_id}:{shot_id}:{local_idx}"
+    digest = hashlib.blake2b(raw.encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=False) >> 1
+```
+
+Không dùng row index/`faiss_row_id` làm khóa. CLIP, SigLIP và BEiT-3 build độc lập bằng
+`faiss.IndexIDMap(faiss.IndexFlatIP(dim))`; mỗi keyframe có vector riêng, L2-normalize và
+ép `float16` trước khi lưu/push. Nhánh Offline chỉ bàn giao ba index độc lập, không build
+index SRRF đã gộp.
+
+OCR được ghi vào SQLite FTS5:
+
+```sql
+CREATE VIRTUAL TABLE ocr_fts USING fts5(
+    video_id UNINDEXED,
+    keyframe_uid UNINDEXED,
+    detected_text,
+    language UNINDEXED,
+    confidence UNINDEXED
+);
+```
+
+Artifact Nhánh 1:
+
+1. `frames.csv`.
+2. `clip.faiss`, `siglip.faiss`, `beit3.faiss`.
+3. `ocr.sqlite`.
+4. Shot/keyframe/quality manifests, checkpoint và publishing state cần cho audit/resume.
+5. Mọi path lưu trong artifact là relative dưới `AIC_DATA`.
+
+
+
+### 2.2 JSON schema OCR prompt (Gemini) — schema chuẩn
 
 ```python
 class OcrResult(BaseModel):
@@ -120,18 +272,120 @@ class OcrResult(BaseModel):
     language: str  # "vi" | "en" | "mixed"
 ```
 
-### 2.3 Điều kiện publish index (bắt buộc — xem chi tiết đầy đủ ở `OFFLINE_INDEXING_SPEC.md` §5)
+### 2.3 Publishing Criteria — điều kiện `complete=true`
 
-Một index chỉ được coi là production-ready khi:
-- `complete = true` (tính theo từng `video_id`, không phải toàn catalog)
-- tập `keyframe_uid` trong `frames.csv` khớp 100% với tập ID đã add vào **cả 3** file FAISS
-  (diff bằng code, **không** đếm số dòng thô)
-- không có NaN/Inf trong vector
-- norm ≈ 1 (đã chuẩn hóa L2 đúng)
-- mapping video/frame/timestamp khớp `frames.csv`
-- checkpoint/resume hoạt động (để resume nếu Kaggle timeout giữa chừng)
+`complete` được tính theo từng `video_id`, không phải toàn catalog. Một video chỉ được đánh
+dấu `complete=true` khi thỏa **tất cả**:
 
-File đang preallocate hoặc checkpoint dở dang **không** được set `complete=true`.
+- [ ] Shot manifest schema v2 hợp lệ và checkpoint Shot Detection ở `1/1`.
+- [ ] Tập `keyframe_uid` trong `frames.csv` khớp 100% với ID trong **cả ba** FAISS
+      `clip.faiss`, `siglip.faiss`, `beit3.faiss` bằng set diff, không đếm dòng thô.
+- [ ] Không có `NaN`/`Inf` trong bất kỳ vector nào.
+- [ ] Vector đã L2-normalize, norm xấp xỉ 1 trên sample kiểm tra.
+- [ ] Mapping `video_id`/`frame_id`/`pts_time` đã sanity-check với video gốc.
+- [ ] Checkpoint/resume đã được thử bằng cách ngắt giữa batch rồi chạy lại, không duplicate
+      và không mất dữ liệu.
+
+File preallocate, artifact partial hoặc checkpoint dở dang không được set `complete=true`.
+Không có cờ Ready chỉnh tay; readiness phải được validator suy ra từ artifact thật.
+
+### 2.4 Đồng bộ artifact Kaggle ↔ local
+
+Dùng HuggingFace Dataset (Git LFS):
+
+```text
+Kaggle build --push_to_hub()--> HF Dataset --snapshot_download()--> máy local
+```
+
+- Vector bắt buộc `float16` trước khi push.
+- Gom 50–100 video hoặc cuối phiên mới push, không push từng video.
+- Revision/commit đặt theo batch (`batch-01`, `batch-02`, ...).
+- Chỉ tải full snapshot về local một lần trước khi thi; pull lại khi có patch khẩn.
+- Không coi upload thành công là Ready nếu Publishing Criteria phía trên chưa PASS.
+
+---
+
+## 2A. ASR Pipeline (Nhánh 3)
+
+Nhánh ASR chạy độc lập trên tài khoản Kaggle/Colab GPU riêng, không tranh quota với Visual
+Embedding. Human-in-the-loop vẫn là fallback cho video chưa có coverage.
+
+### 2A.1 Scope
+
+| Việc | Quyết định |
+|---|---|
+| Tách audio 16 kHz mono bằng FFmpeg | Bắt buộc, local CPU |
+| Whisper Large-v3 / phoWhisper + timestamp | Bắt buộc, GPU riêng |
+| Temporal alignment về keyframe | Bắt buộc |
+| Build `asr.sqlite` FTS5 + coverage report | Bắt buộc |
+| BEATs/audio captioning phi ngôn ngữ | Ngoài scope |
+| Speaker diarization | Ngoài scope |
+
+### 2A.2 Luồng xử lý
+
+```text
+video (.mp4)
+  -> FFmpeg: audio 16 kHz mono
+  -> Whisper Large-v3 / phoWhisper
+  -> segment(start_time, end_time, text, language)
+  -> tìm keyframe_uid gần nhất từ frames.csv
+  -> asr.sqlite + coverage report
+```
+
+Với mỗi segment, chọn keyframe có `pts_time` nằm trong `[start_time, end_time]` và gần
+segment nhất; nếu không có keyframe trong khoảng, chọn keyframe gần `start_time` nhất trong
+cùng video. Không tự tạo khóa ASR mới để thay `keyframe_uid`.
+
+### 2A.3 Schema `AsrSegment`
+
+```python
+class AsrSegment(BaseModel):
+    video_id: str
+    segment_id: str
+    start_time: float
+    end_time: float
+    transcribed_text: str
+    language: Literal["vi", "en"]
+    keyframe_uid_nearest: int
+```
+
+Invariant: identifier/text không rỗng, timestamp không âm, `end_time >= start_time`, và
+`keyframe_uid_nearest` là signed-int64 dương tồn tại trong `frames.csv`.
+
+```sql
+CREATE VIRTUAL TABLE asr_fts USING fts5(
+    video_id UNINDEXED,
+    segment_id UNINDEXED,
+    transcribed_text,
+    language UNINDEXED,
+    keyframe_uid_nearest UNINDEXED,
+    start_time UNINDEXED,
+    end_time UNINDEXED
+);
+```
+
+Tên cột nội dung giữ là `transcribed_text`; OCR dùng `detected_text`. Hai bảng phải đủ
+song song để cùng một `FtsSearcher` dùng được nhưng không đổi tên làm mất nguồn modality.
+
+### 2A.4 Bàn giao và Publishing Criteria ASR
+
+Bàn giao:
+
+1. `asr.sqlite`.
+2. Coverage report liệt kê trạng thái từng `video_id`.
+3. Checkpoint/provenance cần để resume và audit.
+
+Một video chỉ được đánh dấu ASR complete khi:
+
+- [ ] Audio có thật và mọi segment hợp lệ; video không có segment phải được xác minh là
+      không có thoại/âm thanh, không phải lỗi ASR.
+- [ ] Mọi `keyframe_uid_nearest` tồn tại trong `frames.csv` của cùng video.
+- [ ] `asr.sqlite` build FTS5 thành công và query mẫu trả đúng kết quả.
+- [ ] Coverage report không đánh dấu hoàn tất cho checkpoint dở dang.
+
+Online chỉ tăng trọng số ASR khi `UnifiedQueryPlan.spoken_text` không rỗng. Video thiếu
+ASR coverage phải hiện rõ để thí sinh dùng human-in-the-loop, không im lặng diễn giải kết
+quả rỗng thành “không có thoại”.
 
 ---
 
@@ -233,7 +487,7 @@ thay vì đúng 1 vote như OCR/ASR.
   phân phối điểm tương đồng thực tế, không chỉ dựa vào rank thuần như RRF gốc.
 - **CLIP không tham gia SRRF.** CLIP giữ vai trò rollback: chỉ dùng làm `score_visual` chính
   cho keyframe nào mà `siglip.faiss` hoặc `beit3.faiss` **chưa Ready** (theo Publishing
-  Criteria, `OFFLINE_INDEXING_SPEC.md` §5). Khi cả 3 index đã Ready cho video đó, `score_visual`
+  Criteria §2.3). Khi cả 3 index đã Ready cho video đó, `score_visual`
   = kết quả SRRF(SigLIP, BEiT-3); điểm CLIP chỉ log lại để so sánh/tie-break, không cộng thêm
   vào công thức.
 - Output tầng 1: đúng **1** con số `score_visual`/keyframe — đây là input duy nhất của tầng 2.
@@ -315,14 +569,14 @@ ngay khi model sẵn sàng, không phải sửa lại signature giữa chừng t
 |---|---|---|---|---|
 | Query planning (primary) | Gemini 2.5 Flash-Lite | Cloud API | 0 MB | Cần internet |
 | Query planning (fallback) | Qwen3-VL-2B-Instruct | Local GPU, 4-bit | ~1.8 GB | Load/release theo pha |
-| Shot detection (offline) | AutoShot / TransNetV2 port tạm thời | Local CPU, Windows NVIDIA GPU hoặc Colab T4 | Ghi theo batch report | CUDA chọn tường minh, không fallback; phải qua parity gate CPU–CUDA |
+| Shot detection (offline) | TransNetV2 (`transnetv2-pytorch==1.0.5`) | Windows NVIDIA GPU; CPU reference/fallback; Colab T4 phụ | Ghi theo batch report | CUDA chọn tường minh, không fallback; phải qua parity gate CPU–CUDA |
 | Frame recall baseline | CLIP ViT-B/32 | Local/Kaggle | ~300 MB | Rollback an toàn |
 | Frame recall nâng cao | SigLIP + BEiT-3 | Kaggle GPU (offline) | N/A (chạy batch, không online) | Build index nền |
 | OCR (primary) | Gemini 2.5 Flash-Lite | Cloud API | 0 MB | |
 | OCR (fallback) | EasyOCR (CRAFT + latin_g2) | Local CPU | thấp | Đã xác nhận hỗ trợ tiếng Việt |
 | Reranking | Neighbors-Based (thuật toán, không phải model) | Local CPU | 0 MB | |
 | VQA / answer generation | Qwen3-VL-2B-Instruct | Local GPU, 4-bit | ~1.8 GB | Chỉ chạy khi qua Multiplicative Gating |
-| ASR (nhánh 3, song song) | Whisper Large-v3 / phoWhisper | Kaggle/Colab GPU riêng (offline) | N/A (chạy batch, không online) | Xem `ASR_SPEC.md`; human-in-the-loop vẫn giữ làm backup nếu nhánh 3 không kịp |
+| ASR (nhánh 3, song song) | Whisper Large-v3 / phoWhisper | Kaggle/Colab GPU riêng (offline) | N/A (chạy batch, không online) | Xem §2A; human-in-the-loop giữ làm backup nếu coverage thiếu |
 | Reranking + QA verification (tùy chọn) | BLIP-2 ITM | Cloud GPU (RunPod) | N/A (cloud) | Stretch goal — dùng cho `b_i` trong QA gating (§3.5) và reranking (§3.3); graceful degradation nếu chưa sẵn sàng (`b_i = 1.0`), không chặn critical path |
 
 **Lưu ý vận hành:** tắt các tiến trình ngầm chiếm VRAM (LM Studio, Epic Games Launcher...)
@@ -361,24 +615,20 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
 
 ## 7. Checklist triển khai theo thứ tự ưu tiên
 
-1. Khóa schema `frames.csv` + `UnifiedQueryPlan` (mục 1, 3.1) — làm trước tiên, cả hai nhánh
-   dùng chung.
-2. Fix lỗi contract độc lập: whitespace → 422, dedup theo `(video_id, frame_id)`, validator
-   đúng số dòng.
-3. Build `QueryPlanner` interface + 3 lớp fallback (mục 3.1) trước khi code bất kỳ logic
-   retrieval nào phụ thuộc vào nó.
-4. Chạy AutoShot + dual-embedding trên dev subset nhỏ để benchmark tốc độ/VRAM trước khi
-   chạy full 873 video.
-5. Build FAISS + SQLite FTS5 index frame-level.
-6. Nối luồng online: intra-visual fusion (SRRF, §3.2 tầng 1) → inter-modal fusion (Min-Max,
-   §3.2 tầng 2) → reranking → TRAKE/QA logic.
-7. A/B CLIP-only vs CLIP+SigLIP+BEiT-3 trên dev subset có ground truth, đo Recall@k thật —
-   không kết luận "tốt hơn" nếu chưa đo.
-8. Nhánh 3 (ASR): audio extraction → Whisper/phoWhisper → temporal alignment → `asr.sqlite`,
-   chạy độc lập trên Kaggle/Colab account riêng — xem `ASR_SPEC.md`.
-9. Nếu còn dư thời gian: build BLIP-2 Cloud (RunPod) như stretch goal — dùng chung cho cả
-   reranking (§3.3) và QA verification (`b_i`, §3.5). Không chặn release chính; interface
-   gating đã có graceful degradation sẵn nên có thể cắm vào bất kỳ lúc nào trong 6 ngày.
+1. Khóa và test schema `FrameRecord`, `OcrResult`, `AsrSegment`,
+   `UnifiedQueryPlan`.
+2. Chạy Inventory full collection bằng `ffprobe`, **không `--limit`**, kiểm số video và
+   metadata trước Shot Detection.
+3. Dựng environment GPU, doctor PASS, parity TransNetV2 CPU–GPU 5/5 rồi chạy full shot batch
+   với checkpoint/resume.
+4. Trích keyframe Begin/Middle/End, benchmark blur/pHash trên dev subset rồi mới chốt threshold.
+5. Chạy song song: CLIP/SigLIP/BEiT-3 + OCR ở Nhánh 1, Whisper/phoWhisper ở Nhánh 3.
+6. Build `frames.csv`, ba FAISS `IndexIDMap`, `ocr.sqlite`, `asr.sqlite`; chỉ publish
+   video qua đủ Publishing Criteria.
+7. Hoàn thiện Online: QueryPlanner fallback → SRRF visual → fusion visual/OCR/ASR →
+   reranking → TRAKE/QA → dedup/submission.
+8. A/B CLIP-only với SigLIP+BEiT-3 và các threshold trên dev set có ground truth.
+9. Chỉ khi critical path đã ổn định mới làm BLIP-2 Cloud/RunPod như stretch goal.
 
 ---
 
@@ -387,15 +637,11 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
 - **23/08/2026** — Chốt baseline hợp nhất: bỏ mean-pooling shot-level làm index chính, bỏ
   RunPod/BLIP-2 khỏi critical path, đổi OCR fallback từ PARSeq-Ti sang EasyOCR, thêm 3 lớp
   fallback bắt buộc cho `QueryPlanner`.
-- **23/08/2026 (bản 2)** — Đồng bộ `frames.csv` sang khóa `keyframe_uid` (thay `faiss_row_id`
-  positional, khớp `OFFLINE_INDEXING_SPEC.md`). Chuyển ASR từ "hoãn hoàn toàn" sang **Nhánh 3
-  song song** (người phụ trách riêng, tài khoản Kaggle/Colab riêng, không tranh quota với
-  Nhánh 1) — thêm kênh ASR vào fusion, `modality_weights` có 3 khóa. Tách chi tiết ASR ra
-  `ASR_SPEC.md`. Human-in-the-loop giữ làm backup nếu Nhánh 3 không kịp tiến độ.
-- **23/08/2026 (bản 3)** — Sửa xung đột phát hiện khi audit chéo 3 file: §2.3 đổi tiêu chí
-  publish sang diff `keyframe_uid` (khớp `OFFLINE_INDEXING_SPEC.md`, bỏ kiểu đếm dòng thô cũ);
-  đồng bộ schema `OcrResult` (thêm `bbox`, đổi `text`→`detected_text`, `conf`→`confidence`)
-  khớp với `OFFLINE_INDEXING_SPEC.md`.
+- **23/08/2026 (bản 2)** — Đồng bộ `frames.csv` sang khóa `keyframe_uid` thay
+  `faiss_row_id` positional; chuyển ASR thành Nhánh 3 song song, thêm kênh ASR vào fusion và
+  giữ human-in-the-loop làm backup.
+- **23/08/2026 (bản 3)** — Publishing Criteria đổi sang set diff `keyframe_uid`; đồng bộ
+  `OcrResult` với `bbox`, `detected_text` và `confidence`.
 - **23/08/2026 (bản 4)** — Sau khi đối chiếu với 2 baseline tham khảo (FiftyOne BTC/
   `lducc-hcm-aic`, và 1 doc SOTA offline+online khác): (1) Thêm nguyên tắc bắt buộc §0.8 +
   tầng 1 "intra-visual fusion" vào §3.2 — gộp SigLIP+BEiT-3 bằng SRRF thành 1 `score_visual`
@@ -416,3 +662,11 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
   trên Windows để chạy batch dài. Dùng environment CUDA tách biệt, CPU chỉ làm reference;
   vẫn bắt buộc parity 5/5, provenance và fail closed như Colab. Không overwrite environment
   CPU hoặc tự fallback khi driver/CUDA/VRAM không đáp ứng.
+- **24/08/2026 (bản 7)** — Chốt TransNetV2 làm shot detector production; dừng chờ/A-B
+  AutoShot trên critical path. Windows NVIDIA GPU là worker production sau parity 5/5, CPU
+  giữ làm reference/fallback. Batch runner bắt buộc checkpoint signature-aware theo từng
+  video và chỉ nâng `1/1` sau khi manifest schema v2 đã atomic-publish rồi validate lại.
+- **24/08/2026 (bản 8 — baseline duy nhất)** — Hợp nhất toàn bộ contract Offline Indexing
+  và ASR vào file này; xóa hai spec tách nhánh để không còn nhiều nguồn chuẩn. Chốt Inventory
+  `ffprobe` là bước bắt buộc trước Shot Detection full collection, chỉ chạy lại khi tập MP4
+  thay đổi hoặc inventory stale; cấm publish kết quả `--limit` vào output production.

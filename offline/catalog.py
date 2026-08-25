@@ -24,6 +24,74 @@ FRAME_COLUMNS = [
 ]
 
 
+def load_inventory_video_ids(path: Path) -> list[str]:
+    """Load the canonical collection membership from inventory schema v1."""
+
+    source = Path(path)
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot read inventory: {source}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("inventory top-level value must be an object")
+    if payload.get("schema_version") != 1:
+        raise RuntimeError("unsupported inventory schema version")
+    videos = payload.get("videos")
+    if not isinstance(videos, list) or not videos:
+        raise RuntimeError("inventory contains no videos")
+    video_ids: list[str] = []
+    for index, row in enumerate(videos):
+        if not isinstance(row, dict):
+            raise RuntimeError(f"inventory video[{index}] is not an object")
+        video_id = str(row.get("video_id", ""))
+        if not video_id.strip() or video_id != video_id.strip():
+            raise RuntimeError(f"inventory video[{index}] has an invalid video_id")
+        video_ids.append(video_id)
+    if len(set(video_ids)) != len(video_ids):
+        raise RuntimeError("inventory contains duplicate video_id values")
+    return sorted(video_ids)
+
+
+def discover_catalog_inputs(
+    plans_dir: Path,
+    quality_dir: Path,
+    *,
+    expected_video_ids: Iterable[str],
+) -> list[tuple[Path, Path]]:
+    """Match per-video plan/quality manifests for an exact collection."""
+
+    expected = list(expected_video_ids)
+    if not expected:
+        raise ValueError("expected_video_ids must not be empty")
+    if len(set(expected)) != len(expected):
+        raise ValueError("expected_video_ids contains duplicates")
+    expected_set = set(expected)
+
+    def manifests_by_stem(folder: Path, label: str) -> dict[str, Path]:
+        root = Path(folder)
+        if not root.is_dir():
+            raise RuntimeError(f"{label} directory not found: {root}")
+        paths = sorted(root.glob("*.json"))
+        mapping = {path.stem: path for path in paths if path.is_file()}
+        if len(mapping) != len(paths):
+            raise RuntimeError(f"{label} directory contains duplicate manifest stems")
+        return mapping
+
+    plans = manifests_by_stem(plans_dir, "keyframe plan")
+    qualities = manifests_by_stem(quality_dir, "keyframe quality")
+    plan_ids = set(plans)
+    quality_ids = set(qualities)
+    if plan_ids != expected_set or quality_ids != expected_set:
+        raise RuntimeError(
+            "catalog collection inputs do not match inventory: "
+            f"missing_plans={sorted(expected_set - plan_ids)[:10]}, "
+            f"unexpected_plans={sorted(plan_ids - expected_set)[:10]}, "
+            f"missing_quality={sorted(expected_set - quality_ids)[:10]}, "
+            f"unexpected_quality={sorted(quality_ids - expected_set)[:10]}"
+        )
+    return [(plans[video_id], qualities[video_id]) for video_id in sorted(expected_set)]
+
+
 def load_quality_manifest(
     path: Path,
 ) -> tuple[str, str, str, list[QualityDecision]]:
@@ -172,6 +240,10 @@ def validate_frames_catalog(csv_path: Path, state_path: Path | None = None) -> b
         return False
     try:
         state = json.loads(state_file.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            return False
+        if state.get("schema_version") != 1:
+            return False
         if state.get("complete") is not True:
             return False
         if sha256_file(destination) != state.get("csv_sha256"):
@@ -190,6 +262,20 @@ def validate_frames_catalog(csv_path: Path, state_path: Path | None = None) -> b
                 for row in reader
             ]
         _validate_catalog_records(records)
-        return len(records) == state.get("record_count")
+        record_video_ids = {record.video_id for record in records}
+        sources = state.get("sources")
+        if not isinstance(sources, list) or any(
+            not isinstance(source, dict) for source in sources
+        ):
+            return False
+        source_video_ids = [str(source.get("video_id", "")) for source in sources]
+        if len(set(source_video_ids)) != len(source_video_ids):
+            return False
+        if set(source_video_ids) != record_video_ids:
+            return False
+        return (
+            len(records) == state.get("record_count")
+            and len(record_video_ids) == state.get("video_count")
+        )
     except (KeyError, OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
         return False

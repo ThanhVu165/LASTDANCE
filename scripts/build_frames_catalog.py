@@ -7,6 +7,8 @@ from pathlib import Path
 
 from offline.artifacts import sha256_file
 from offline.catalog import (
+    discover_catalog_inputs,
+    load_inventory_video_ids,
     load_quality_manifest,
     select_catalog_records,
     validate_frames_catalog,
@@ -18,17 +20,58 @@ from offline.preprocessing.keyframes import load_keyframe_plan
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", type=Path, action="append", required=True)
-    parser.add_argument("--quality", type=Path, action="append", required=True)
+    parser.add_argument("--plan", type=Path, action="append")
+    parser.add_argument("--quality", type=Path, action="append")
+    parser.add_argument(
+        "--collection",
+        action="store_true",
+        help="aggregate the exact inventory collection from plan/quality directories",
+    )
+    parser.add_argument("--inventory", type=Path)
+    parser.add_argument("--plans-dir", type=Path)
+    parser.add_argument("--quality-dir", type=Path)
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--output", type=Path)
     return parser
 
 
+def resolve_catalog_inputs(
+    args: argparse.Namespace,
+    layout: DataLayout,
+) -> list[tuple[Path, Path]]:
+    plans = args.plan or []
+    qualities = args.quality or []
+    collection_options_used = any(
+        value is not None
+        for value in (args.inventory, args.plans_dir, args.quality_dir)
+    )
+    if args.collection:
+        if plans or qualities:
+            raise ValueError("--collection cannot be combined with --plan/--quality")
+        inventory = (args.inventory or (layout.index / "inventory.json")).resolve()
+        plans_dir = (args.plans_dir or (layout.index / "keyframe-plans")).resolve()
+        quality_dir = (
+            args.quality_dir or (layout.index / "keyframe-quality")
+        ).resolve()
+        return discover_catalog_inputs(
+            plans_dir,
+            quality_dir,
+            expected_video_ids=load_inventory_video_ids(inventory),
+        )
+    if collection_options_used:
+        raise ValueError("--inventory/--plans-dir/--quality-dir require --collection")
+    if not plans or not qualities:
+        raise ValueError("provide --collection or matching --plan/--quality arguments")
+    if len(plans) != len(qualities):
+        raise ValueError("--plan and --quality must be provided the same number of times")
+    return [
+        (plan.resolve(), quality.resolve())
+        for plan, quality in zip(plans, qualities, strict=True)
+    ]
+
+
 def main() -> int:
     args = build_parser().parse_args()
-    if len(args.plan) != len(args.quality):
-        raise ValueError("--plan and --quality must be provided the same number of times")
     layout = (
         DataLayout(args.data_root.resolve())
         if args.data_root
@@ -37,9 +80,8 @@ def main() -> int:
     all_records = []
     sources = []
     seen_videos: set[str] = set()
-    for plan_argument, quality_argument in zip(args.plan, args.quality, strict=True):
-        plan_path = plan_argument.resolve()
-        quality_path = quality_argument.resolve()
+    catalog_inputs = resolve_catalog_inputs(args, layout)
+    for plan_path, quality_path in catalog_inputs:
         video_id, _, items = load_keyframe_plan(plan_path)
         (
             quality_video_id,

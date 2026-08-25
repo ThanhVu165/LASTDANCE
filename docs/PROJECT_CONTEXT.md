@@ -1,7 +1,7 @@
 # Bối cảnh dự án LASTDANCE
 
 > **ARCHIVED 24/08/2026:** Tài liệu này mô tả kiến trúc Qwen video-window cũ. Nguồn chuẩn
-> hiện tại là `BASELINE_SPEC.md`, `OFFLINE_INDEXING_SPEC.md` và `ASR_SPEC.md`.
+> kỹ thuật duy nhất hiện tại là `BASELINE_SPEC.md`.
 
 LASTDANCE hỗ trợ người tham gia AIC2026 tìm video bằng câu truy vấn tự nhiên. Đây
 là tài liệu bối cảnh sản phẩm; kiến trúc chi tiết nằm trong

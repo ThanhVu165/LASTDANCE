@@ -20,8 +20,8 @@ chọn phụ. Luôn chạy code từ repository, không copy hoặc viết lại
   `excluded_transition_ranges` với reason `transition_score_above_threshold`.
 - Output bước này chưa có `complete=true`; còn keyframe, embedding và Publishing Criteria.
 
-Đọc trước khi sửa code: `AGENTS.md`, mục 1.1/1.1a của
-`docs/OFFLINE_INDEXING_SPEC.md` và file này.
+Đọc trước khi sửa code: `AGENTS.md`, `docs/BASELINE_SPEC.md` §2.1a–§2.1b và file
+runbook này. Nếu runbook lệch baseline thì baseline thắng.
 
 ## 2. Lấy đúng code
 
@@ -113,7 +113,7 @@ Chỉ tiếp tục khi Python, FFmpeg/ffprobe, Torch, TransNetV2, CUDA/GPU và w
 
 ## 6. Parity Windows GPU bắt buộc
 
-> **Trạng thái hiện tại: CHƯA CHẠY PARITY WINDOWS GPU THẬT.** Kết quả `60/60 unit test PASS`
+> **Trạng thái hiện tại: CHƯA CHẠY PARITY WINDOWS GPU THẬT.** Kết quả `64/64 unit test PASS`
 > chỉ xác minh code local/mock, không chứng minh CUDA trên máy đồng đội cho cùng boundary.
 > Production gate vẫn đóng cho tới khi cả 5 phép so sánh dưới đây PASS thật.
 
@@ -162,7 +162,7 @@ foreach ($videoId in $parityIds) {
 Cả 5 phải `PASS` đúng từng shot boundary và toàn bộ `excluded_transition_ranges`, không chỉ
 cùng số shot. Lệch một frame transition có thể làm keyframe plan/mapping
 `keyframe_uid → frame_id` khác nhau và phá join `frames.csv` ở bước sau. Dừng, giữ report để
-điều tra và không treo production batch. Không được suy diễn parity từ `60/60 unit test`.
+điều tra và không treo production batch. Không được suy diễn parity từ `64/64 unit test`.
 
 ## 7. Chạy batch được phân công
 
@@ -183,10 +183,21 @@ Windows NVIDIA GPU:
   -PythonArguments @(".\worker-01.txt", "--device", "cuda")
 ```
 
-Batch runner dùng một model cho cả danh sách, kiểm tra manifest cũ trước khi skip, ghi từng
-manifest atomic và tiếp tục video kế tiếp nếu một video lỗi. `--fail-fast` dùng khi muốn dừng
-ngay; `--overwrite` chỉ dùng khi chủ động chạy lại artifact cũ. Chạy lại đúng lệnh sau khi
-mất điện/restart sẽ skip manifest GPU tương thích và tiếp tục phần còn thiếu.
+Batch runner dùng một model cho cả danh sách và checkpoint riêng cho từng worker/device/
+namespace output. Mặc định checkpoint nằm tại:
+
+```text
+AIC_DATA/index/shot-batches/<tên-list>.<device>.<namespace-hash>.checkpoint.json
+```
+
+Trước inference mỗi video, runner ghi `shot_detection = 0/1`. Chỉ sau khi manifest được
+atomic-publish và validate lại đầy đủ mới ghi `1/1`. Nếu ngắt bằng `Ctrl+C`/mất điện:
+chạy lại **đúng lệnh và đúng file list**; video đang infer sẽ chạy lại, còn manifest hợp lệ
+đã publish nhưng checkpoint chưa nâng sẽ được nhận lại và nâng lên `1/1` mà không infer
+lặp. Checkpoint báo hoàn tất nhưng manifest mất/hỏng sẽ fail closed. `--fail-fast` dừng sau
+lỗi đầu; `--overwrite` chỉ dùng khi chủ động chạy lại artifact. Có thể truyền
+`--checkpoint <path>`, nhưng path phải nằm trong `AIC_DATA` và không được dùng chung giữa
+hai worker/namespace.
 
 Mỗi worker nhận tập ID không giao nhau. Trước khi chạy, kiểm tra bảng **Điều phối worker Shot
 Detection** trong `docs/CURRENT_STATUS.md`: người phụ trách, file list và phạm vi ID phải được
@@ -201,15 +212,16 @@ Manifest:
 AIC_DATA/shots/<video_id>.json
 ```
 
-Batch report tự sinh tại:
+Batch report và checkpoint tự sinh tại:
 
 ```text
 AIC_DATA/index/shot-batches/<tên-file-list>.json
+AIC_DATA/index/shot-batches/<tên-list>.<device>.<namespace-hash>.checkpoint.json
 ```
 
-Report ghi commit, runtime Python/Torch/CUDA/FFmpeg, detector signature, ID thành công/skip
-và lỗi. Bàn giao các manifest cùng batch report. Không gửi/commit MP4, environment, weight,
-cache, raw prediction, log, JPEG hoặc vector.
+Report ghi commit, runtime Python/Torch/CUDA/FFmpeg, detector signature, đường dẫn checkpoint,
+ID thành công/skip và lỗi. Bàn giao các manifest, batch report và checkpoint để audit/resume.
+Không gửi/commit MP4, environment, weight, cache, raw prediction, log, JPEG hoặc vector.
 
 Manifest trong `index/shot-parity-windows-gpu/` chỉ dùng kiểm tra; không bàn giao thay cho
 manifest production đã được phân công.

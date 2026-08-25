@@ -1,14 +1,11 @@
 # Trạng thái hiện tại của LASTDANCE
 
-Cập nhật: 24/08/2026.
+Cập nhật: 25/08/2026.
 
 ## Quyết định kiến trúc
 
-Repo đã pivot hoàn toàn từ Qwen video-window sang baseline frame-level trong:
-
-- `BASELINE_SPEC.md`;
-- `OFFLINE_INDEXING_SPEC.md`;
-- `ASR_SPEC.md`.
+Repo đã pivot hoàn toàn từ Qwen video-window sang baseline frame-level. Nguồn chuẩn kỹ
+thuật duy nhất là `BASELINE_SPEC.md`; contract Offline và ASR đã được hợp nhất vào đây.
 
 `AGENTS.md` đã được thay bằng context mới. Các tài liệu window-first cũ chỉ còn là lịch sử.
 `backend/app` chưa bị sửa hoặc chuyển thư mục trong Nhánh 1; implementation này không được
@@ -22,14 +19,19 @@ wire vào dispatch logic mới.
   signed-int64 dương và từ chối ID chứa whitespace thay vì âm thầm chuẩn hóa.
 - Inventory đọc FPS, resolution, duration, frame count và audio stream thật bằng `ffprobe`.
 - Artifact inventory chỉ lưu path tương đối dưới `AIC_DATA` và publish bằng atomic replace.
-- Có interface `ShotDetector`; TransNetV2 là default tạm thời, lazy-load và không tự tải
-  model/weight. Có thể swap sang AutoShot mà không đổi orchestration xung quanh.
+- Có interface `ShotDetector`; TransNetV2 đã được chốt làm detector production, lazy-load
+  và không tự tải model/weight. Windows NVIDIA GPU là worker production sau parity 5/5; CPU
+  giữ làm reference/fallback.
 - Shot manifest schema v2 validate boundary tăng dần, không overlap, ghi rõ mọi
   `excluded_transition_ranges` và cảnh báo (không fail) nếu tỷ lệ frame transition bị loại
   vượt 1%; lỗi coverage accounting vẫn fail closed.
 - Shot adapter hỗ trợ device `cpu`/`cuda` tường minh, CPU là default và CUDA fail closed nếu
-  không khả dụng. Batch runner dùng chung một model, ghi runtime/provenance/peak CUDA và
-  atomic-publish từng manifest; parity checker so exact boundary/range CPU–CUDA.
+  không khả dụng. Batch runner production chọn `--device cuda`, dùng chung một model, ghi
+  runtime/provenance/peak CUDA và atomic-publish từng manifest; parity checker so exact
+  boundary/range CPU–CUDA.
+- Batch runner có checkpoint riêng theo worker/device/output namespace: ghi `0/1` trước
+  inference và chỉ ghi `1/1` sau atomic publish + validation. Resume xử lý được cả ngắt
+  giữa inference lẫn crash-window sau publish; complete state thiếu manifest sẽ fail closed.
 - Keyframe plan chọn Begin/Middle/End theo timestamp frame thật từ `ffprobe`, dedup shot
   ngắn và sinh `FrameRecord` với path tương đối dưới `AIC_DATA`. Builder load manifest v2
   qua validator, truyền `excluded_transition_ranges` tường minh cho planner và planner
@@ -46,6 +48,10 @@ wire vào dispatch logic mới.
 - Catalog builder yêu cầu quality manifest khớp 100% UID/metadata/SHA của plan, cấm trùng
   `keyframe_uid`, `(video_id, local_idx)` và `(video_id, frame_id)`, rồi ghi `frames.csv`
   atomic với sidecar state khóa bằng SHA-256 và validator fail-closed.
+- Collection mode của catalog lấy tập ID canonical từ `inventory.json`, tự ghép đúng
+  `keyframe-plans/<video_id>.json` với `keyframe-quality/<video_id>.json` cho toàn bộ
+  collection và từ chối publish nếu thiếu/thừa dù chỉ một video. Manual
+  `--plan/--quality` vẫn được giữ cho smoke/dev subset.
 - Checkpoint theo `video_id` + stage + signature, không cho resume chéo signature hoặc lùi
   progress.
 - Publishing readiness được suy ra fail-closed từ tập `keyframe_uid` của cả CLIP/SigLIP/
@@ -55,45 +61,43 @@ wire vào dispatch logic mới.
 ## Kiểm thử
 
 - Compile `offline shared scripts tests`: pass.
-- Test Nhánh 1: 60/60 pass bằng environment production Python 3.11.9.
+- Test Nhánh 1: 72/72 pass bằng Python 3.11.9 và `.venv-shot-gpu` ngày 25/08/2026.
 - Compile legacy `backend/app`: pass.
 - Không chạy được toàn bộ backend test trong môi trường hiện tại vì thiếu `fastapi` và
   `opencv-python`; đây là dependency-environment blocker, không phải regression đã quan sát.
 
 ## Gate production Shot Detection Windows GPU
 
-**BLOCKED — parity Windows GPU thật chưa chạy.** `60/60 test PASS` là unit test
-local/mock/CPU path, không thay thế inference CUDA thật trên đúng 5 MP4 dev-subset. Không
-được chạy `worker-01.txt` production trước khi toàn bộ bảng sau PASS:
+**ACCEPTED — parity CPU–GPU exact 5/5 PASS ngày 25/08/2026.** Tập 873 manifest CUDA trong
+`AIC_DATA/shots` là nguồn shot production được phép dùng cho keyframe downstream.
 
 | Điều kiện | Trạng thái đã xác minh |
 |---|---|
-| Driver mới đã cài, Windows đã reboot và `check_nvidia_windows.ps1` hậu-reboot PASS | CHƯA XÁC MINH |
-| Doctor `.venv-shot-gpu` báo CUDA/GPU/weight PASS | CHƯA XÁC MINH |
-| `L21_V001` exact manifest compare CPU–GPU | CHƯA CHẠY |
-| `L21_V002` exact manifest compare CPU–GPU | CHƯA CHẠY |
-| `L21_V003` exact manifest compare CPU–GPU | CHƯA CHẠY |
-| `L21_V005` exact manifest compare CPU–GPU | CHƯA CHẠY |
-| `L21_V006` exact manifest compare CPU–GPU | CHƯA CHẠY |
+| Driver/GPU và `check_nvidia_windows.ps1` PASS | PASS — RTX 4050 6141 MiB, driver 581.15 |
+| `.venv-shot-gpu`, CUDA và bundled weight hợp lệ | PASS — batch CUDA hoàn tất |
+| `L21_V001` exact manifest compare CPU–GPU | PASS |
+| `L21_V002` exact manifest compare CPU–GPU | PASS |
+| `L21_V003` exact manifest compare CPU–GPU | PASS |
+| `L21_V005` exact manifest compare CPU–GPU | PASS |
+| `L21_V006` exact manifest compare CPU–GPU | PASS |
 
 Exact compare bao gồm từng shot boundary và mọi `excluded_transition_ranges`; không được
 chỉ so shot count. Lệch một transition frame có thể làm keyframe plan/mapping
 `keyframe_uid → frame_id` khác nhau và phá join `frames.csv` về sau.
 
-## Điều phối worker Shot Detection
+Artifact CUDA hiện có trong `AIC_DATA/shots`: 873/873 manifest hợp lệ, batch report không
+có failure, checkpoint đủ 873/873; tổng 97.810 shot và 3.658 excluded transition ranges.
+CPU reference được giữ riêng tại `AIC_DATA/index/shot-parity-cpu` để audit.
 
-Đây là registry bắt buộc trước khi chạy phân tán. Hiện chưa có tên người/phạm vi ID cụ thể,
-do đó cả hai worker đều chưa được phép khởi chạy production:
+## Điều phối worker Shot Detection
 
 | Worker | Người phụ trách | File phân công | Phạm vi video ID | Trạng thái |
 |---|---|---|---|---|
-| Windows NVIDIA GPU | Đồng đội — chưa cung cấp tên | `worker-01.txt` | CHƯA CHỐT | BLOCKED bởi parity + phân công |
+| Windows NVIDIA GPU local | Người dùng | `worker-01.txt` | 873/873 | ACCEPTED — parity 5/5 PASS |
 | Colab CUDA | CHƯA PHÂN CÔNG | `worker-colab.txt` | CHƯA CHỐT | DISABLED |
 
-Trước khi start, người điều phối phải thay `CHƯA...` bằng tên người và phạm vi/list ID thật,
-đối chiếu hai tập có giao nhau hay không, rồi ghi kết quả tại đây. Colab không tự được bật
-chỉ vì code vẫn còn trong repo. Hai batch report có cùng `video_id` phải bị xem là xung đột,
-không merge tự động.
+Không cần chạy lại batch shot 873. Colab vẫn disabled; nếu bật về sau, hai batch report có
+cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 ### Handoff triển khai 24/08/2026
 
@@ -113,21 +117,20 @@ không merge tự động.
   git diff --check
   ```
 
-- Kết quả gần nhất: compile pass và 60/60 test Nhánh 1 pass.
+- Kết quả gần nhất: compile pass, 64/64 test Nhánh 1 pass và `git diff --check` sạch.
 - Chưa có artifact production mới: chưa sinh `inventory.json`, shot manifest,
   `frames.csv`, FAISS hoặc SQLite từ dữ liệu thật; do đó mọi video vẫn phải được xem là
   `complete=false`.
 - Chưa đo throughput, peak VRAM, disk size hoặc ETA vì chưa chạy model/dataset thật.
-- Environment production đã được clean-install và update idempotent: CPython 3.11.9,
-  FFmpeg/ffprobe 7.1.1, Torch 2.12.1, FAISS CPU 1.9.0 và TransNetV2 package 1.0.5.
-- Toolchain doctor profile `offline-local`, compile và 60/60 test đều pass.
-- Đã tạo lock riêng Windows Conda-native + pip-transitive và runner không sửa PATH hệ thống.
-- Miniforge installer 26.3.2-3 đã tải và SHA-256 pass. Silent install vào repo thất bại với
-  exit code 2 do đường dẫn có khoảng trắng; không có environment/toolchain partial được tạo.
-  Script đã chuyển base toolchain sang `%LOCALAPPDATA%` (không sửa PATH hệ thống), còn
-  `.venv-offline` vẫn là environment riêng trong repo; clean install và rerun đều pass.
-- Wheel TransNetV2 bundle weight 30.506.391 byte; pipeline verify SHA-256
-  `a313d0b3bebfa9a71914b375bfdf918a30b5c3b1e6be51972d35dd8078b442de` trước load.
+- Checkout hiện tại không có `.venv-shot-gpu` hoặc `.venv-offline`. System Python 3.11.9
+  đủ để compile và chạy 64/64 unit test, nhưng không phải environment production.
+- Doctor `shot-windows-gpu` trên system Python FAIL đúng vì Torch 2.5.1 CPU, thiếu
+  `transnetv2-pytorch`, `ffmpeg-python`, `ImageHash` và CUDA không khả dụng trong Torch.
+- Lock/bootstrap Windows GPU đã có trong repo; cần tạo `.venv-shot-gpu` trên máy đích rồi
+  chạy lại doctor trước parity.
+- Weight contract vẫn khóa SHA-256
+  `a313d0b3bebfa9a71914b375bfdf918a30b5c3b1e6be51972d35dd8078b442de` và sẽ được doctor
+  kiểm tra sau khi cài package.
 - Smoke thật trên video tổng hợp 100 frame đỏ→xanh tách đúng 2 shot `[0..49]` và `[50..99]`;
   manifest có package version, CPU, threshold, weight source và hash.
 - Smoke preprocessing E2E trên video đó: plan/extract 6/6 Begin/Middle/End, report quality
@@ -155,26 +158,25 @@ không merge tự động.
 
 ## Chưa triển khai hoặc chưa chạy thật
 
-- Chưa chạy preprocessing toàn bộ collection. AutoShot weight Baidu vẫn chưa xác nhận và
-  chưa A/B với TransNetV2 port.
+- Shot Detection CUDA 873 video đã được accept sau parity 5/5. Keyframe
+  plan/extraction/quality report-only đang chạy thành hai shard disjoint 437 + 436 video,
+  mỗi shard có checkpoint/report/extraction state riêng.
 - Ngưỡng blur/pHash production chưa chốt vì visual audit chưa thay thế ground-truth A/B.
   Cosine dedup chờ embedding và không nằm trên critical path hiện tại.
 - Chưa build CLIP/SigLIP/BEiT-3 embedding hoặc FAISS `IndexIDMap`.
 - Chưa có `ocr.sqlite` hoặc `asr.sqlite`.
-- Chưa chạy Kaggle/Colab GPU hoặc Windows CUDA production, chưa dùng quota và chưa push
-  Hugging Face Dataset. Profile Windows GPU đã có code/test local nhưng parity thật trên máy
-  đồng đội vẫn chờ đủ 5 video; chưa được chạy batch production trước khi gate này PASS.
-- Máy Codex hiện có NVIDIA driver 516.40 và Torch 2.12.1 CPU nên preflight GPU dừng đúng ở
-  yêu cầu driver >=528.33; chưa clean-install hoặc benchmark CUDA environment tại máy này.
+- Chưa dùng Kaggle/Colab hoặc push Hugging Face Dataset. Windows CUDA local đã dùng cho shot
+  batch; `.venv-shot-gpu` chỉ là environment shot detection, không thay thế environment
+  local-CPU cho inventory/keyframe/quality.
 - Internet trong phòng thi chưa xác nhận; Gemini không được coi là dependency bắt buộc.
 
 ## Bước tiếp theo
 
-1. Đồng đội cập nhật driver, dựng `.venv-shot-gpu` và chạy parity đủ 5 dev video; chỉ treo
-   batch Windows GPU nếu mọi boundary/range khớp 100%.
-2. Tạo embedding builders có `--limit`, checkpoint/resume, signature và float16 output.
-3. Build ba FAISS `IndexIDMap` độc lập và validator diff `keyframe_uid` theo video.
-4. Chạy ground-truth A/B trước khi bật blur/pHash filtering hoặc đổi shot detector.
+1. Chờ hai shard keyframe hoàn tất và xác minh đủ 873 plan/quality cùng JPEG không rỗng.
+2. Chạy `scripts.build_frames_catalog --collection`; lệnh chỉ publish khi inventory,
+   plan và quality khớp chính xác toàn collection.
+3. Tạo embedding builders, build ba FAISS `IndexIDMap` độc lập và diff `keyframe_uid`.
+4. Chốt ngưỡng blur/pHash bằng ground-truth A/B; không filter mù artifact report-only.
 
 ## Log phiên
 
@@ -185,12 +187,13 @@ không merge tự động.
 
 ### Đang làm dở (task hiện tại, nếu có)
 
-- Task: xác minh parity Shot Detection CPU–Windows CUDA rồi treo batch trên máy đồng đội.
-- File đang sửa tiếp: code/profile/runbook đã hoàn tất local; bước còn lại là cập nhật driver
-  và chạy thật trên NVIDIA GPU của đồng đội, không phải viết adapter riêng.
-- Đã làm tới bước nào / còn thiếu gì: dev-subset CPU đã hoàn tất tới `frames.csv`; CUDA CLI,
-  batch report và comparator đã test local. Còn thiếu parity thật 5/5 Windows GPU, sau đó
-  mới được chạy production batch. Embedding CLIP/SigLIP/BEiT-3 vẫn chưa build.
+- Task hiện tại: hoàn tất keyframe plan → exact extraction → quality → `frames.csv` cho
+  toàn bộ 873 video.
+- Parity CPU–GPU 5/5 exact PASS; 873 shot manifest đã accepted. Batch runner mới khóa
+  inventory/shot exact membership, input/config/implementation signature và resume
+  fail-closed; 72/72 test PASS.
+- Hai shard keyframe disjoint đang chạy. Sau khi cả hai report `complete=true`, build và
+  validate `scripts.build_frames_catalog --collection`.
 - **Lệnh để tự kiểm tra trạng thái thật** (không tin lời mô tả, chạy lại):
   ```powershell
   git status --short
@@ -204,17 +207,29 @@ không merge tự động.
 
 ---
 
-### Quyết định mới phát sinh (chưa kịp đưa vào AGENTS.md)
+### Quyết định mới phát sinh
 
 - Môi trường production Nhánh 1 dùng CPython 3.11.9; dependency Windows local và Kaggle
   tách profile để Kaggle không bị thay wheel PyTorch/CUDA có sẵn.
 - TransNetV2 dùng adapter tổng quát, không tự tải weight trong request path. Package
-  `transnetv2-pytorch==1.0.5` chỉ là lựa chọn tạm để smoke/A-B, chưa là model production.
+  `transnetv2-pytorch==1.0.5` đã được chốt làm runtime shot detection production; GPU chạy
+  batch sau parity 5/5, CPU làm reference/fallback.
 - Package trên bundle weight; default kiểm tra SHA-256
   `a313d0b3bebfa9a71914b375bfdf918a30b5c3b1e6be51972d35dd8078b442de`. External
   weight chỉ là override và bắt buộc checksum. Shot manifest lưu đầy đủ provenance.
 - `--limit` của keyframe extraction là điểm dừng có thể resume, không được đưa vào artifact
   signature hoặc làm giảm `total` của full plan.
+
+### [24/08/2026] Chốt TransNetV2 GPU + checkpoint shot batch
+
+- Người dùng chốt TransNetV2 làm detector production; AutoShot được bỏ khỏi critical path.
+- `run_shot_batch` ghi checkpoint `0/1` trước inference và `1/1` sau atomic publish +
+  validation; signature khóa detector/device/weight, stat MP4 và output namespace.
+- Test đã cover ngắt trong inference, crash sau publish trước checkpoint, adopt manifest và
+  fail closed khi complete state thiếu manifest. Compile + 64/64 test PASS, diff check sạch.
+- NVIDIA preflight đã PASS; chưa chạy CUDA thật vì `.venv-shot-gpu` chưa tồn tại. Production
+  vẫn BLOCKED bởi GPU doctor, parity 5/5 và registry phân công worker.
+
 
 ---
 
@@ -230,9 +245,8 @@ không merge tự động.
   Conda-native và pip-transitive đã tạo.
 - [24/08/2026] — TransNetV2 smoke thật — video tổng hợp 100 frame đỏ→xanh được tách đúng
   `[0..49]`, `[50..99]`; manifest ghi package/device/threshold/source/SHA — PASS.
-- [24/08/2026] — `AGENTS.md`, `docs/BASELINE_SPEC.md`,
-  `docs/OFFLINE_INDEXING_SPEC.md`, `docs/ASR_SPEC.md` — copy source-of-truth và kiểm tra
-  SHA-256 khớp file nguồn — PASS.
+- [24/08/2026] — Bộ ba spec ban đầu đã được kiểm tra chéo; về sau contract Offline/ASR
+  được hợp nhất trở lại `docs/BASELINE_SPEC.md` để chỉ còn một nguồn chuẩn.
 
 ---
 

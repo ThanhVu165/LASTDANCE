@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -12,9 +13,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from offline.checkpoints import CheckpointStore
 from offline.config import DataLayout
 from offline.preprocessing.shot_detection import (
     DEFAULT_TRANSNETV2_DEVICE,
+    ShotDetector,
     TRANSNETV2_PYTORCH_BUNDLED_WEIGHTS_SHA256,
     ensure_transnetv2_device_available,
     get_default_shot_detector,
@@ -26,6 +29,7 @@ from offline.preprocessing.shot_detection import (
 
 
 _VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+_CHECKPOINT_STAGE = "shot_detection"
 
 
 def _binary_version(command: str) -> str:
@@ -109,6 +113,62 @@ def resolve_shots_directory(layout: DataLayout, configured: Path | None) -> Path
     return destination
 
 
+def resolve_checkpoint_path(
+    layout: DataLayout,
+    configured: Path | None,
+    *,
+    video_list: Path,
+    device: str,
+    shots_directory: Path,
+) -> Path:
+    """Resolve a worker-local checkpoint without colliding across output namespaces."""
+
+    if configured is not None:
+        destination = configured.resolve()
+        if not destination.is_relative_to(layout.root):
+            raise ValueError("--checkpoint must stay inside AIC_DATA")
+        return destination
+
+    namespace = shots_directory.resolve().relative_to(layout.root).as_posix()
+    namespace_hash = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:12]
+    return (
+        layout.index
+        / "shot-batches"
+        / f"{video_list.stem}.{device}.{namespace_hash}.checkpoint.json"
+    )
+
+
+def build_video_checkpoint_signature(
+    *,
+    source: Path,
+    relative_video_path: str,
+    expected_signature: dict[str, object],
+    shots_directory: Path,
+    data_root: Path,
+) -> str:
+    """Bind resume state to the exact input, detector and output namespace."""
+
+    stat = source.stat()
+    namespace = shots_directory.resolve().relative_to(data_root.resolve()).as_posix()
+    payload = {
+        "schema_version": 1,
+        "source": {
+            "relative_video_path": relative_video_path,
+            "size_bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        },
+        "detector_signature": expected_signature,
+        "output_namespace": namespace,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -145,6 +205,98 @@ def _validate_existing_manifest(
             )
 
 
+def run_checkpointed_video(
+    *,
+    video_id: str,
+    source: Path,
+    relative_video_path: str,
+    output: Path,
+    detector: ShotDetector,
+    expected_signature: dict[str, object],
+    shots_directory: Path,
+    data_root: Path,
+    checkpoint_store: CheckpointStore,
+    overwrite: bool = False,
+) -> str:
+    """Run or adopt one atomic manifest and durably advance its checkpoint."""
+
+    if not source.is_file():
+        raise RuntimeError(f"video file is missing for {video_id}")
+    signature = build_video_checkpoint_signature(
+        source=source,
+        relative_video_path=relative_video_path,
+        expected_signature=expected_signature,
+        shots_directory=shots_directory,
+        data_root=data_root,
+    )
+    progress = checkpoint_store.get(video_id, _CHECKPOINT_STAGE)
+    if progress is not None and progress.signature != signature:
+        raise RuntimeError(
+            f"checkpoint signature mismatch for {video_id}; use a new checkpoint path"
+        )
+
+    manifest_is_valid = False
+    if output.is_file():
+        try:
+            _validate_existing_manifest(
+                output,
+                video_id=video_id,
+                relative_video_path=relative_video_path,
+                expected_signature=expected_signature,
+            )
+            manifest_is_valid = True
+        except Exception:
+            if not overwrite:
+                raise
+
+    if manifest_is_valid and not overwrite:
+        checkpoint_store.update(
+            video_id=video_id,
+            stage=_CHECKPOINT_STAGE,
+            signature=signature,
+            next_index=1,
+            total=1,
+        )
+        return "skipped"
+
+    if progress is not None and progress.finished and not overwrite:
+        raise RuntimeError(
+            f"checkpoint marks {video_id} complete but its manifest is missing"
+        )
+
+    if progress is None or not progress.finished:
+        checkpoint_store.update(
+            video_id=video_id,
+            stage=_CHECKPOINT_STAGE,
+            signature=signature,
+            next_index=0,
+            total=1,
+        )
+
+    detection = detector.detect(source)
+    write_shot_manifest_atomic(
+        output,
+        video_id=video_id,
+        relative_video_path=relative_video_path,
+        detector=detector,
+        detection=detection,
+    )
+    _validate_existing_manifest(
+        output,
+        video_id=video_id,
+        relative_video_path=relative_video_path,
+        expected_signature=expected_signature,
+    )
+    checkpoint_store.update(
+        video_id=video_id,
+        stage=_CHECKPOINT_STAGE,
+        signature=signature,
+        next_index=1,
+        total=1,
+    )
+    return "completed"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("video_list", type=Path, help="UTF-8 file with one video_id/line")
@@ -159,6 +311,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="manifest output directory; defaults to AIC_DATA/shots",
     )
     parser.add_argument("--report", type=Path)
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        help=(
+            "per-worker checkpoint file; defaults under "
+            "AIC_DATA/index/shot-batches"
+        ),
+    )
     parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -216,6 +376,14 @@ def main() -> int:
         device=device,
     )
     shots_directory = resolve_shots_directory(layout, args.shots_dir)
+    checkpoint_path = resolve_checkpoint_path(
+        layout,
+        args.checkpoint,
+        video_list=args.video_list,
+        device=device,
+        shots_directory=shots_directory,
+    )
+    checkpoint_store = CheckpointStore(checkpoint_path)
     report_path = args.report or (
         layout.index / "shot-batches" / f"{args.video_list.stem}.json"
     )
@@ -225,6 +393,7 @@ def main() -> int:
         "git_commit": _git_commit(),
         "runtime": build_runtime_signature(device),
         "detector_signature": expected_signature,
+        "checkpoint_path": checkpoint_path.relative_to(layout.root).as_posix(),
         "requested_video_ids": video_ids,
         "completed_video_ids": [],
         "skipped_video_ids": [],
@@ -237,26 +406,22 @@ def main() -> int:
         relative_video_path = f"videos/{video_id}.mp4"
         output = shots_directory / f"{video_id}.json"
         try:
-            if not source.is_file():
-                raise RuntimeError(f"video file is missing for {video_id}")
-            if output.is_file() and not args.overwrite:
-                _validate_existing_manifest(
-                    output,
-                    video_id=video_id,
-                    relative_video_path=relative_video_path,
-                    expected_signature=expected_signature,
-                )
+            outcome = run_checkpointed_video(
+                video_id=video_id,
+                source=source,
+                relative_video_path=relative_video_path,
+                output=output,
+                detector=detector,
+                expected_signature=expected_signature,
+                shots_directory=shots_directory,
+                data_root=layout.root,
+                checkpoint_store=checkpoint_store,
+                overwrite=args.overwrite,
+            )
+            if outcome == "skipped":
                 report["skipped_video_ids"].append(video_id)
                 print(f"SKIP: {video_id} already has a compatible schema-v2 manifest")
             else:
-                detection = detector.detect(source)
-                write_shot_manifest_atomic(
-                    output,
-                    video_id=video_id,
-                    relative_video_path=relative_video_path,
-                    detector=detector,
-                    detection=detection,
-                )
                 report["detector_signature"] = detector.signature
                 report["completed_video_ids"].append(video_id)
                 print(f"PASS: {video_id} -> {output.name}")

@@ -90,8 +90,9 @@ Không copy path của máy A sang `frames.csv` rồi dùng trên máy B.
 ## 4. TransNetV2
 
 TensorFlow inference upstream cũ yêu cầu TensorFlow 2.1 nên không nằm trong environment
-Python 3.11 chính. Profile local dùng `transnetv2-pytorch==1.0.5`; đây vẫn phải qua smoke/A-B
-trên video dự án trước khi được coi là production replacement cho AutoShot.
+Python 3.11 chính. Shot detector production đã chốt dùng port PyTorch
+`transnetv2-pytorch==1.0.5`; không tiếp tục chờ hoặc A/B AutoShot trên critical path. CUDA
+vẫn phải qua parity 5/5 với reference CPU trước khi chạy batch production.
 
 `transnetv2-pytorch==1.0.5` bundle weight trong wheel. Pipeline không tải thêm weight lúc
 xử lý video và kiểm tra weight này bằng SHA-256 cố định
