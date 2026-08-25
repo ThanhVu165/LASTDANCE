@@ -1,5 +1,8 @@
 # Lộ trình phát triển LASTDANCE
 
+> **ARCHIVED 24/08/2026:** Roadmap này đã bị thay thế bởi checklist và contract trong
+> `BASELINE_SPEC.md`, nguồn chuẩn kỹ thuật duy nhất.
+
 Lộ trình này thay thế toàn bộ plan/checkpoint cũ. Mỗi milestone phải có baseline,
 ground truth và điều kiện rollback; không đổi production chỉ vì một model mới tải
 được hoặc một smoke query nhìn có vẻ tốt.

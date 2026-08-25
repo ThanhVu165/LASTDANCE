@@ -1,0 +1,3 @@
+# Complete local-CPU environment for inventory, shot detection, filtering and index build.
+-r index.txt
+-r shot-transnetv2.txt

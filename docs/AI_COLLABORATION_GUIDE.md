@@ -1,5 +1,8 @@
 # Hướng dẫn cộng tác với AI trong LASTDANCE
 
+> **ARCHIVED 24/08/2026:** Hướng dẫn này thuộc contract window-first cũ. `AGENTS.md` và ba
+> baseline spec mới là instruction hiện hành.
+
 Mục tiêu của tài liệu này là giúp thành viên dùng coding agent mà vẫn giữ kiến
 trúc video-window/model-first, không tạo tập hợp patch theo query mẫu.
 

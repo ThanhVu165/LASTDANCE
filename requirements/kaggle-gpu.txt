@@ -1,0 +1,9 @@
+# Kaggle already provides a CUDA-matched torch build. Do not replace it blindly.
+-r base.txt
+
+transformers==5.15.1
+accelerate==1.14.0
+sentence-transformers==6.0.0
+huggingface-hub==1.3.5
+safetensors==0.6.2
+sentencepiece==0.2.1

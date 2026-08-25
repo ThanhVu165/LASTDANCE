@@ -1,5 +1,8 @@
 # Kiến trúc hệ thống LASTDANCE
 
+> **ARCHIVED 24/08/2026:** Kiến trúc window-first trong tài liệu này đã bị thay thế bởi
+> baseline frame-level tại `BASELINE_SPEC.md`.
+
 Tài liệu này là mô tả kỹ thuật chuẩn của kiến trúc mới. Mục tiêu chính là tìm
 đúng **video window** chứa đầy đủ ngữ nghĩa của truy vấn, sau đó mới chọn frame,
 rerank, trả lời QA hoặc căn chỉnh TRAKE. Trạng thái triển khai thực tế nằm trong
