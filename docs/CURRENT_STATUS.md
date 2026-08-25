@@ -1,6 +1,6 @@
 # Trạng thái hiện tại của LASTDANCE
 
-Cập nhật: 25/08/2026.
+Cập nhật: 26/08/2026.
 
 ## Quyết định kiến trúc
 
@@ -70,9 +70,12 @@ wire vào dispatch logic mới.
 ## Kiểm thử
 
 - Compile `offline shared scripts tests`: pass.
-- Test Nhánh 1: 87/87 pass bằng Python 3.11.9 trên nền hợp nhất
+- Test Nhánh 1 local: 87/87 pass bằng Python 3.11.9 trên nền hợp nhất
   `origin/codex/offline-shot-detection@02d6d3e` ngày 25/08/2026. Đây gồm test batch
   Shot/Keyframe/Catalog mới và 15 test Visual Embedding/FAISS.
+- Kaggle Visual: 87 test PASS (`skipped=6` theo platform) bằng Python 3.12.13 ngày
+  26/08/2026; doctor chỉ còn fail contract Python cũ trước khi được người dùng duyệt cập
+  nhật. Torch `2.10.0+cu128`, CUDA 12.8, Tesla T4 và revision CLIP/SigLIP đều PASS.
 - Compile legacy `backend/app`: pass.
 - Không chạy được toàn bộ backend test trong môi trường hiện tại vì thiếu `fastapi` và
   `opencv-python`; đây là dependency-environment blocker, không phải regression đã quan sát.
@@ -200,6 +203,20 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 ---
 
+### [26/08/2026] Chốt Python 3.12 cho Kaggle Visual
+
+- Người dùng xác nhận rõ cho phép đổi contract: chỉ profile `kaggle-gpu` dùng Python 3.12.x;
+  local CPU, Shot Windows GPU và Shot Colab vẫn giữ Python 3.11.x.
+- Gate Kaggle thật: Python 3.12.13, Torch `2.10.0+cu128`, CUDA 12.8, Tesla T4; 87 test PASS
+  với 6 skip theo platform; CLIP và SigLIP resolve đúng immutable revision.
+- Visual manifest ghi thêm Python/system/machine bên cạnh Torch/Transformers/CUDA/GPU.
+  Artifact `.npy` vẫn `int64` UID + `float16` vector, `allow_pickle=False`, nên handoff về
+  local Python 3.11 để build FAISS không đổi contract.
+- Cấm resume một checkpoint dở dang qua runtime Python/Torch/Transformers khác; session đổi
+  runtime phải dùng batch ID/output mới để không trộn shard khó audit.
+
+---
+
 ### [26/08/2026] Sửa pin dependency Kaggle Visual
 
 - Kaggle resolver phát hiện `requirements/kaggle-gpu.txt` khóa
@@ -239,8 +256,8 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 ### Quyết định mới phát sinh
 
-- Môi trường production Nhánh 1 dùng CPython 3.11.9; dependency Windows local và Kaggle
-  tách profile để Kaggle không bị thay wheel PyTorch/CUDA có sẵn.
+- Môi trường local/Shot Nhánh 1 dùng CPython 3.11.9; Kaggle Visual dùng Python 3.12.x.
+  Dependency tách profile để Kaggle không bị thay wheel PyTorch/CUDA có sẵn.
 - TransNetV2 dùng adapter tổng quát, không tự tải weight trong request path. Package
   `transnetv2-pytorch==1.0.5` đã được chốt làm runtime shot detection production; GPU chạy
   batch sau parity 5/5, CPU làm reference/fallback.

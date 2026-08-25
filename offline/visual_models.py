@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import platform
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -83,6 +84,9 @@ class TransformersImageEncoder:
     def runtime_metadata(self) -> dict[str, object]:
         metadata: dict[str, object] = {
             "device": self.device,
+            "python": platform.python_version(),
+            "system": platform.system(),
+            "machine": platform.machine(),
             "transformers": importlib.metadata.version("transformers"),
             "torch": importlib.metadata.version("torch"),
         }

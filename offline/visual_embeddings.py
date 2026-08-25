@@ -31,6 +31,7 @@ SUPPORTED_MODALITIES = ("clip", "siglip", "beit3")
 SCHEMA_VERSION = 1
 _NORM_ATOL = 5e-3
 _PROCESS_TOKEN = f"pid-{os.getpid()}-{uuid.uuid4().hex}"
+_RUNTIME_TEXT_FIELDS = ("device", "python", "system", "machine", "transformers", "torch")
 
 
 class IntentionalEmbeddingInterruption(RuntimeError):
@@ -389,13 +390,32 @@ def _validate_encoder(encoder: VisualEncoder, modality: str) -> None:
         raise RuntimeError("model_revision must be an immutable 40-character commit SHA")
 
 
-def _runtime_metadata(encoder: VisualEncoder) -> dict[str, object]:
-    metadata = getattr(encoder, "runtime_metadata", {})
-    if callable(metadata):
-        metadata = metadata()
+def _validate_runtime_metadata(metadata: object) -> dict[str, object]:
     if not isinstance(metadata, dict):
         raise RuntimeError("encoder runtime_metadata must be a mapping")
+    if any(
+        not isinstance(metadata.get(field), str) or not str(metadata[field]).strip()
+        for field in _RUNTIME_TEXT_FIELDS
+    ):
+        raise RuntimeError("encoder runtime_metadata provenance is incomplete")
+    if metadata["device"] == "cuda":
+        if (
+            not isinstance(metadata.get("cuda_runtime"), str)
+            or not str(metadata["cuda_runtime"]).strip()
+            or not isinstance(metadata.get("gpu_name"), str)
+            or not str(metadata["gpu_name"]).strip()
+            or type(metadata.get("peak_cuda_memory_bytes")) is not int
+            or int(metadata["peak_cuda_memory_bytes"]) < 0
+        ):
+            raise RuntimeError("CUDA runtime_metadata provenance is incomplete")
     return dict(metadata)
+
+
+def _runtime_metadata(encoder: VisualEncoder) -> dict[str, object]:
+    metadata: object = getattr(encoder, "runtime_metadata", {})
+    if callable(metadata):
+        metadata = metadata()
+    return _validate_runtime_metadata(metadata)
 
 
 def run_visual_embedding(
@@ -464,6 +484,7 @@ def run_visual_embedding(
         and next_index == total
     ):
         manifest = json.loads(final_manifest_path.read_text(encoding="utf-8"))
+        _validate_runtime_metadata(manifest.get("runtime"))
         manifest_model = manifest.get("model")
         manifest_catalog = manifest.get("catalog")
         if (
@@ -653,6 +674,7 @@ def validate_completed_visual_embedding(
     if not final_manifest_path.is_file() or not checkpoint_path.is_file():
         raise RuntimeError("completed visual embedding manifest/checkpoint is missing")
     manifest = json.loads(final_manifest_path.read_text(encoding="utf-8"))
+    _validate_runtime_metadata(manifest.get("runtime"))
     if (
         manifest.get("schema_version") != SCHEMA_VERSION
         or manifest.get("scope") != "single_modality_batch"

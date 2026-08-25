@@ -1,4 +1,4 @@
-# Cross-platform Python 3.11 dependencies shared by local CPU and Kaggle jobs.
+# Dependencies shared by local Python 3.11 and Kaggle Visual Python 3.12 jobs.
 pydantic==2.10.3
 numpy==1.26.4
 pandas==2.2.3

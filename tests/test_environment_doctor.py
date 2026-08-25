@@ -16,6 +16,10 @@ class EnvironmentDoctorTests(unittest.TestCase):
         self.assertTrue(check_python((3, 11, 9)).ok)
         self.assertFalse(check_python((3, 12, 0)).ok)
 
+    def test_python_check_supports_kaggle_312_contract(self):
+        self.assertTrue(check_python((3, 12, 13), required_minor=(3, 12)).ok)
+        self.assertFalse(check_python((3, 11, 9), required_minor=(3, 12)).ok)
+
     def test_weight_check_requires_existing_verified_artifact(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "weights.pth"
@@ -68,7 +72,24 @@ class EnvironmentDoctorTests(unittest.TestCase):
             package_check.return_value.ok = True
             executable_check.return_value.ok = True
             checks = collect_checks("offline-local", {}, check_data=False)
+        python_check.assert_called_once_with(required_minor=(3, 11))
         self.assertNotIn("AIC_DATA", [check.name for check in checks])
+
+    def test_kaggle_profile_requires_python_312(self):
+        with patch("scripts.environment_doctor.check_python") as python_check, patch(
+            "scripts.environment_doctor.check_package"
+        ) as package_check, patch(
+            "torch.cuda.is_available", return_value=True
+        ), patch(
+            "torch.cuda.get_device_name", return_value="Tesla T4"
+        ):
+            python_check.return_value.ok = True
+            package_check.return_value.ok = True
+            checks = collect_checks("kaggle-gpu", {}, check_data=False)
+
+        python_check.assert_called_once_with(required_minor=(3, 12))
+        cuda = next(check for check in checks if check.name == "cuda")
+        self.assertTrue(cuda.ok)
 
     def test_colab_shot_profile_requires_cuda_without_requiring_data(self):
         with patch("scripts.environment_doctor.check_python") as python_check, patch(

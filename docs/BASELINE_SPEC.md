@@ -5,9 +5,11 @@
 > và tài liệu lệch nhau, sửa code theo tài liệu, trừ khi quyết định mới của người dùng được
 > ghi vào Changelog. Hai spec tách nhánh cũ đã được hợp nhất và xóa để tránh lệch phiên bản.
 
-**Cập nhật:** 24/08/2026
+**Cập nhật:** 26/08/2026
 **Thời gian còn lại:** 6 ngày
-**Máy tham chiếu:** Intel i5-12450H, RTX 4050 Laptop 6 GiB VRAM, Windows/Kaggle/Colab, Python 3.11
+**Máy tham chiếu local/Shot:** Intel i5-12450H, RTX 4050 Laptop 6 GiB VRAM,
+Windows/Colab, Python 3.11. **Visual Embedding Kaggle GPU:** Python 3.12.x; giữ PyTorch CUDA
+khớp image Kaggle thay vì cài đè wheel chung.
 
 ---
 
@@ -670,3 +672,9 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
   và ASR vào file này; xóa hai spec tách nhánh để không còn nhiều nguồn chuẩn. Chốt Inventory
   `ffprobe` là bước bắt buộc trước Shot Detection full collection, chỉ chạy lại khi tập MP4
   thay đổi hoặc inventory stale; cấm publish kết quả `--limit` vào output production.
+- **26/08/2026 (bản 9)** — Theo xác nhận rõ của người dùng, tách contract Python theo môi
+  trường: local/Shot Detection giữ Python 3.11.x; Visual Embedding trên image Kaggle hiện tại
+  dùng Python 3.12.x. Gate thật đã PASS 87 test (6 skip theo platform), Torch
+  `2.10.0+cu128`, CUDA 12.8, Tesla T4 và immutable revision của CLIP/SigLIP. Manifest Visual
+  phải ghi Python/system/machine cùng Torch/Transformers/CUDA/GPU; checkpoint dở dang chỉ
+  được resume trong cùng runtime, không trộn shard giữa Python/Torch khác nhau.

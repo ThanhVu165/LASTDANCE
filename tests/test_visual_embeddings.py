@@ -26,7 +26,14 @@ class FakeEncoder:
     modality = "clip"
     model_id = "test/clip"
     model_revision = "a" * 40
-    runtime_metadata = {"device": "fake"}
+    runtime_metadata = {
+        "device": "fake",
+        "python": "3.12.13",
+        "system": "test",
+        "machine": "test",
+        "transformers": "5.15.1",
+        "torch": "2.10.0+cu128",
+    }
 
     def __init__(self) -> None:
         self.encoded_paths: list[Path] = []
@@ -138,7 +145,7 @@ class VisualEmbeddingTests(unittest.TestCase):
             self.assertTrue(manifest["complete"])
             self.assertTrue(manifest["checkpoint_resume_verified"])
             self.assertEqual(manifest["modality"], "clip")
-            self.assertEqual(manifest["runtime"], {"device": "fake"})
+            self.assertEqual(manifest["runtime"], FakeEncoder.runtime_metadata)
 
             no_work_encoder = FakeEncoder()
             repeated = run_visual_embedding(

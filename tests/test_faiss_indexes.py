@@ -21,7 +21,14 @@ class FakeClipEncoder:
     modality = "clip"
     model_id = "test/clip"
     model_revision = "a" * 40
-    runtime_metadata = {"device": "fake"}
+    runtime_metadata = {
+        "device": "fake",
+        "python": "3.12.13",
+        "system": "test",
+        "machine": "test",
+        "transformers": "5.15.1",
+        "torch": "2.10.0+cu128",
+    }
 
     def encode(self, image_paths):
         return np.asarray(

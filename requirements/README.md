@@ -1,6 +1,7 @@
 # Dependency profiles
 
-Target runtime is CPython 3.11.9. Do not install every profile into one environment.
+Local/Shot target runtime is CPython 3.11.9. Kaggle Visual target runtime is CPython
+3.12.x from the validated Kaggle image. Do not install every profile into one environment.
 
 | File | Purpose | Machine |
 |---|---|---|
@@ -44,8 +45,8 @@ file's SHA-256 before model construction. `AIC_TRANSNETV2_WEIGHTS` and
 while processing a video.
 
 These files pin direct dependencies. After the first successful clean install on Windows
-Python 3.11 and Kaggle, export resolved locks into `requirements/locks/` together with the
-platform/Python tag. Do not reuse a Windows lock on Kaggle Linux.
+Python 3.11 and Kaggle Python 3.12, export resolved locks into `requirements/locks/` together
+with the platform/Python tag. Do not reuse a Windows lock on Kaggle Linux.
 
 The checked-in Windows lock is split because Conda owns Python/FFmpeg/native libraries and
 pip owns the Python application packages:

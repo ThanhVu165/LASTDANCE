@@ -35,6 +35,14 @@ _BASE_PACKAGES = {
     "ImageHash": ("imagehash", "4.3.1"),
 }
 
+_PROFILE_PYTHON_MINORS = {
+    "dev": (3, 11),
+    "offline-local": (3, 11),
+    "shot-colab-gpu": (3, 11),
+    "shot-windows-gpu": (3, 11),
+    "kaggle-gpu": (3, 12),
+}
+
 _PROFILE_PACKAGES = {
     "dev": _BASE_PACKAGES,
     "offline-local": {
@@ -69,14 +77,21 @@ _PROFILE_PACKAGES = {
 }
 
 
-def check_python(version_info: tuple[int, ...] | None = None) -> CheckResult:
+def check_python(
+    version_info: tuple[int, ...] | None = None,
+    *,
+    required_minor: tuple[int, int] = (3, 11),
+) -> CheckResult:
     version = version_info or tuple(sys.version_info[:3])
-    ok = version[:2] == (3, 11)
+    ok = version[:2] == required_minor
     return CheckResult(
         "python",
         ok,
         True,
-        f"{version[0]}.{version[1]}.{version[2]} (required: 3.11.x)",
+        (
+            f"{version[0]}.{version[1]}.{version[2]} "
+            f"(required: {required_minor[0]}.{required_minor[1]}.x)"
+        ),
     )
 
 
@@ -175,7 +190,7 @@ def collect_checks(
     if profile not in _PROFILE_PACKAGES:
         raise ValueError(f"unknown profile: {profile}")
     values = os.environ if environment is None else environment
-    checks = [check_python()]
+    checks = [check_python(required_minor=_PROFILE_PYTHON_MINORS[profile])]
     checks.extend(
         check_package(distribution, module, expected)
         for distribution, (module, expected) in _PROFILE_PACKAGES[profile].items()

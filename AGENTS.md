@@ -18,8 +18,9 @@
   `local_idx`.**
 - **Dữ liệu:** 500GB video thô, 873 video, mục tiêu nén còn ~80GB keyframe + <5GB
   vector/text index để nạp vừa RAM máy local.
-- **Máy tham chiếu:** Intel i5-12450H, RTX 4050 Laptop **6 GiB VRAM**, Python 3.11,
-  Windows/Kaggle/Colab.
+- **Máy tham chiếu local/Shot:** Intel i5-12450H, RTX 4050 Laptop **6 GiB VRAM**,
+  Python 3.11 trên Windows/Colab. **Visual Embedding Kaggle GPU dùng Python 3.12.x** theo
+  image Kaggle đã validate; không áp Python 3.12 ngược sang profile local/Shot.
 - **Thời gian còn lại:** tính từ 23/08/2026, hạn 6 ngày cho toàn bộ pipeline offline + online.
 
 ---

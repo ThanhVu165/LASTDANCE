@@ -65,9 +65,11 @@ python -m scripts.verify_visual_model_revisions
 python -m unittest discover -s tests -v
 ```
 
-Doctor phải PASS Python 3.11, package pin và CUDA/T4. `kaggle-gpu.txt` không pin Torch để
-không thay wheel CUDA có sẵn của Kaggle. Nếu pip resolver muốn thay Torch, dừng lại và audit,
-không tiếp tục bằng một environment khác contract.
+Doctor phải PASS Python 3.12.x, package pin và CUDA/T4. Gate thật ngày 26/08/2026 dùng Python
+3.12.13, Torch `2.10.0+cu128`, CUDA 12.8 và Tesla T4. `kaggle-gpu.txt` không pin Torch để
+không thay wheel CUDA có sẵn của Kaggle; version Torch trên là provenance đã quan sát, không
+phải lệnh cài đè. Nếu pip resolver muốn thay Torch, dừng lại và audit, không tiếp tục bằng
+một environment khác contract. Local CPU và Shot Detection vẫn dùng Python 3.11.x.
 
 `transformers==5.15.1` yêu cầu `huggingface-hub>=1.5.0` và `safetensors>=0.8.0`; các pin
 trong `kaggle-gpu.txt` phải thỏa đồng thời hai constraint này. Nếu pip báo
@@ -78,8 +80,9 @@ Revision verifier gọi API thật bằng `huggingface_hub.model_info(model_id, 
 yêu cầu repository ID + SHA resolve khớp tuyệt đối với registry; kiểm tra 40 ký tự hex trong
 unit test không thay thế bước này. BEiT-3 đang blocked nên chưa được gọi API ở gate hiện tại.
 
-Ghi output doctor và `python -m pip freeze` vào Kaggle output/batch report. Chưa đưa lock
-Kaggle vào repo cho tới khi clean-install + inference thật PASS.
+Ghi output doctor, `python -m pip freeze`, Python/system/machine, Torch/Transformers, CUDA và
+GPU vào Kaggle output/batch report. Final manifest của adapter production ghi cùng provenance
+này. Chưa đưa lock Kaggle vào repo cho tới khi clean-install + inference thật PASS.
 
 ## 4. Smoke test input và fail-closed BEiT-3
 
@@ -139,6 +142,11 @@ intentional-interruption marker có cùng signature.
 Không đổi `batch-size`, catalog, model revision hoặc danh sách video khi resume. Các giá trị
 này nằm trong signature; đổi phải fail closed. Nếu cần giảm batch size do OOM, dùng batch ID
 mới (ví dụ `dev-subset-5-bs32`), không ghi đè artifact cũ.
+
+Không mang checkpoint dở dang sang Python/Torch/Transformers runtime khác để resume. Python
+không nằm trong content key của keyframe, nhưng đổi runtime giữa các shard có thể tạo sai
+lệch số khó audit. Nếu session mới khác runtime đã ghi lúc bắt đầu, giữ artifact cũ để điều
+tra và chạy batch ID/output mới.
 
 ## 6. Validate CLIP độc lập
 

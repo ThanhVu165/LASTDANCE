@@ -1,7 +1,8 @@
 # Môi trường tái lập cho LASTDANCE frame-level
 
-Tài liệu này áp dụng cho Nhánh 1. Target chuẩn là CPython 3.11.9. Backend window-first cũ
-có environment riêng và không được trộn dependency vào `.venv-offline`.
+Tài liệu này áp dụng cho Nhánh 1. Local/Shot target là CPython 3.11.9; Visual Embedding trên
+image Kaggle đã validate dùng CPython 3.12.x. Backend window-first cũ có environment riêng
+và không được trộn dependency vào `.venv-offline`.
 
 ## 1. Các profile dependency
 
@@ -136,6 +137,11 @@ Chỉ khi cần thử external weight override:
 
 ## 5. Kaggle
 
+Profile `kaggle-gpu` yêu cầu Python 3.12.x. Gate ngày 26/08/2026 đã chạy thật với Python
+3.12.13, Torch `2.10.0+cu128`, CUDA 12.8 và Tesla T4; Torch là provenance của image tại
+thời điểm chạy, không phải pin để cài đè lên image tương lai. Local/Shot vẫn yêu cầu Python
+3.11.x.
+
 Trong notebook:
 
 ```bash
@@ -144,9 +150,11 @@ pip install -r requirements/kaggle-gpu.txt
 python -m scripts.environment_doctor --profile kaggle-gpu
 ```
 
-Ghi vào batch report: Python, package version, `torch.__version__`, CUDA, GPU, model ID,
-revision, dtype, dimension, pixel/config signature và peak VRAM. Không push vector nếu chưa
-ép `float16`.
+Ghi vào batch report và manifest: Python, system/machine, package version,
+`torch.__version__`, CUDA, GPU, model ID, revision, dtype, dimension, pixel/config signature
+và peak VRAM. Không push vector nếu chưa ép `float16`. Một checkpoint Visual dở dang phải
+được resume trong cùng Python/Torch/Transformers runtime; nếu session đổi runtime, dùng batch
+ID/output mới thay vì trộn shard.
 
 Lệnh build/intentional interruption/resume/validate và cấu trúc Kaggle Dataset bắt buộc nằm
 trong `VISUAL_EMBEDDING_RUNBOOK.md`. Kaggle input là read-only nên tách `--keyframes-root`
