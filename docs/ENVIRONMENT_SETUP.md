@@ -148,6 +148,10 @@ Ghi vào batch report: Python, package version, `torch.__version__`, CUDA, GPU, 
 revision, dtype, dimension, pixel/config signature và peak VRAM. Không push vector nếu chưa
 ép `float16`.
 
+Lệnh build/intentional interruption/resume/validate và cấu trúc Kaggle Dataset bắt buộc nằm
+trong `VISUAL_EMBEDDING_RUNBOOK.md`. Kaggle input là read-only nên tách `--keyframes-root`
+khỏi `--embedding-root` writable; không hardcode mount path vào artifact.
+
 Shot Detection trên Colab dùng profile và doctor riêng, không dùng profile embedding:
 
 ```bash

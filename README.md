@@ -8,13 +8,19 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
 
 Đọc theo thứ tự:
 
-1. [`AGENTS.md`](AGENTS.md) - phạm vi và invariant bắt buộc.
-2. [`docs/BASELINE_SPEC.md`](docs/BASELINE_SPEC.md) - **nguồn chuẩn kỹ thuật duy nhất** cho
-   Offline, ASR và Online.
-3. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) - trạng thái triển khai thực tế.
-4. [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) - môi trường Windows/Kaggle.
-5. [`docs/SHOT_DETECTION_RUNBOOK.md`](docs/SHOT_DETECTION_RUNBOOK.md) - cách vận hành
-   TransNetV2 nhiều máy; runbook không được thay đổi contract của baseline.
+1. [`AGENTS.md`](AGENTS.md) - phạm vi và các invariant bắt buộc.
+2. [`docs/BASELINE_SPEC.md`](docs/BASELINE_SPEC.md) - baseline hợp nhất, thắng khi tài liệu
+   chi tiết còn lệch.
+3. [`docs/OFFLINE_INDEXING_SPEC.md`](docs/OFFLINE_INDEXING_SPEC.md) - chi tiết Nhánh 1.
+4. [`docs/ASR_SPEC.md`](docs/ASR_SPEC.md) - data contract Nhánh 3.
+5. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) - trạng thái triển khai thực tế.
+6. [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) - môi trường Windows/Kaggle.
+7. [`docs/SHOT_DETECTION_RUNBOOK.md`](docs/SHOT_DETECTION_RUNBOOK.md) - chạy và bàn giao
+   TransNetV2 giữa nhiều máy.
+8. [`docs/VISUAL_EMBEDDING_RUNBOOK.md`](docs/VISUAL_EMBEDDING_RUNBOOK.md) - chuẩn bị input,
+   chạy CLIP/SigLIP độc lập trên Kaggle và test checkpoint/resume thật.
+9. [`docs/FAISS_INDEX_RUNBOOK.md`](docs/FAISS_INDEX_RUNBOOK.md) - build/add/validate từng
+   `IndexIDMap` độc lập trên CPU local sau khi embedding batch hoàn tất.
 
 Các tài liệu window-first cũ được giữ lại làm lịch sử, không còn là runtime instruction.
 
@@ -60,11 +66,13 @@ $env:AIC_DATA = "D:\path\to\aic-data"
 ```
 
 Pipeline hiện có inventory, TransNetV2 shot detection, Begin/Middle/End extraction,
-Laplacian/pHash quality manifest và `frames.csv` catalog builder fail-closed. Weight
+Laplacian/pHash quality manifest, `frames.csv` catalog builder và visual embedding shard
+builder cùng FAISS `IndexIDMap` builder/validator fail-closed. Weight
 TransNetV2 bundle trong package pin và được kiểm tra SHA-256 trước load; không tải weight
 trong lúc xử lý video. Batch runner có checkpoint/resume riêng theo từng video và chỉ nâng
-trạng thái sau khi manifest đã atomic-publish rồi validate lại. Embedding/OCR GPU chưa chạy
-trong lát cắt này.
+trạng thái sau khi manifest đã atomic-publish rồi validate lại. CLIP/SigLIP adapter chưa
+chạy Kaggle thật; BEiT-3 còn khóa chờ chốt official checkpoint. OCR GPU chưa chạy trong lát
+cắt này.
 
 ## Invariant quan trọng
 

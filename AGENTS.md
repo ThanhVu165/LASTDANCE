@@ -135,6 +135,10 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 
 ## 8. Việc KHÔNG được tự ý làm
 
+- Không tự chạy `git commit`, `git push`, tạo Pull Request hoặc publish thay đổi lên remote.
+  Chỉ được thực hiện từng hành động này khi người dùng yêu cầu rõ trong phiên hiện tại. Trước
+  khi commit phải báo `git status`, danh sách file dự kiến add và loại artifact sinh tự động;
+  yêu cầu làm code/"làm tiếp" không được hiểu ngầm là cho phép commit hoặc push.
 - Không đổi `keyframe_uid` trở lại kiểu positional/row-index.
 - Không tự thêm audio captioning phi ngôn ngữ (BEATs) hay speaker diarization — đã bị cắt
   khỏi scope Nhánh 3 để kịp deadline.
@@ -165,6 +169,13 @@ Trước khi code, Codex nên tự trả lời (và nói rõ trong phản hồi)
 - Workflow chuyên biệt phải có runbook trong `docs/` và được liên kết từ README liên quan.
 - Trước khi push, chạy lại các lệnh trong hướng dẫn trên môi trường mục tiêu hoặc ghi rõ phần
   nào mới chỉ là planned/chưa được xác minh.
+- Commit và push là hai quyền riêng biệt: được yêu cầu commit không đồng nghĩa được phép push.
+  Không dùng auto-commit/auto-push trong script hoặc workflow của repo.
 - Trước khi chạy Shot Detection phân tán, bảng **Điều phối worker Shot Detection** trong
   `docs/CURRENT_STATUS.md` phải ghi người phụ trách + phạm vi ID cho từng worker và các tập ID
   phải không giao nhau. Worker còn `CHƯA PHÂN CÔNG`/`DISABLED` tuyệt đối không được khởi chạy.
+- Visual embedding/FAISS phải có checkpoint riêng cho từng modality và được phép
+  publish/resume độc lập theo `keyframe_uid`; không tạo barrier chờ cả 3 modality. Trước khi
+  đánh dấu checkpoint/resume verified, bắt buộc demo ngắt giữa batch rồi chạy lại thật.
+- Logic CLIP rollback, SRRF và `score_visual` thuộc Nhánh 2 online; Nhánh 1 chỉ build artifact
+  độc lập, không tự thêm fusion/rollback vào embedding hoặc FAISS builder.

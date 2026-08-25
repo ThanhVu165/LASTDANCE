@@ -5,6 +5,10 @@
 *.pt
 *.ckpt
 *.safetensors
+*.npy
+*.npz
+*.faiss
+*.bin
 
 # Python environments and caches
 /.pytest_cache/

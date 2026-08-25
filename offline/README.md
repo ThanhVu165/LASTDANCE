@@ -16,6 +16,10 @@ Thư mục này triển khai Nhánh 1 theo nguồn chuẩn duy nhất `docs/BASE
 - `frames.csv` builder yêu cầu plan/quality UID + SHA khớp và publish state hash fail-closed;
 - checkpoint theo signature, atomic write và không có cờ ready chỉnh tay;
 - evaluator fail-closed cho Publishing Criteria của ba visual index.
+- visual embedding shard builder chạy một modality/lệnh, float16 + L2, signature/checkpoint
+  riêng và có intentional-stop gate để xác minh resume thật trên Kaggle.
+- FAISS builder chạy CPU local, một modality/lệnh, add batch rời nhau bằng `keyframe_uid`
+  và diff ID thật với `frames.csv`; không chờ hoặc rebuild modality khác.
 
 TransNetV2 đã được chốt làm shot detector production. Môi trường Python 3.11 dùng package
 PyTorch đã pin; Windows NVIDIA GPU là worker production sau parity 5/5, còn CPU giữ làm
@@ -165,5 +169,21 @@ package/device/threshold/weight checksum, chia `video_id` không giao nhau và d
 riêng cho mỗi worker/namespace. Mỗi video chỉ lên `1/1` sau khi manifest schema v2 đã
 atomic-publish và validate lại; worker CUDA phải đối chiếu đủ 5 video dev-subset trước
 production batch.
+
+## Handoff visual embedding Kaggle
+
+Đọc `docs/VISUAL_EMBEDDING_RUNBOOK.md` trước khi upload input/chạy GPU. CLIP và SigLIP có
+candidate dev đã pin immutable revision; mỗi modality publish/resume độc lập. BEiT-3 đang
+fail-closed chờ chốt official Microsoft UniLM retrieval checkpoint, không được thay bằng
+BEiT thường. Chưa modality nào được coi là checkpoint/resume verified cho tới khi chạy quy
+trình exit 75 → process mới resume → validator PASS trên Kaggle thật.
+
+## Build FAISS local
+
+Sau khi một embedding modality đã hoàn tất và được tải về, đọc
+`docs/FAISS_INDEX_RUNBOOK.md`. Builder yêu cầu checkpoint/resume verified, dùng đúng
+`IndexIDMap(IndexFlatIP)`, hỗ trợ add batch video rời nhau và publish sidecar SHA-bound sau
+cùng. `complete=true` của một sidecar chỉ thuộc modality/video đã khai báo, chưa phải trạng
+thái Ready của toàn pipeline.
 
 Xem `docs/ENVIRONMENT_SETUP.md` để dựng environment giống nhau trên Windows/Kaggle.

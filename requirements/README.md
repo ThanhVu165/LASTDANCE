@@ -10,6 +10,11 @@ Target runtime is CPython 3.11.9. Do not install every profile into one environm
 | `shot-colab-gpu.txt` | TransNetV2 CUDA shot detection, giữ Torch có sẵn | Google Colab T4 |
 | `kaggle-gpu.txt` | CLIP/SigLIP/BEiT-3 batch embedding | Kaggle GPU |
 
+Kaggle visual embedding phải theo `docs/VISUAL_EMBEDDING_RUNBOOK.md`. Profile hiện chạy
+CLIP/SigLIP dev candidate; BEiT-3 vẫn fail-closed chờ official UniLM retrieval checkpoint.
+Sau khi tải embedding artifact về, FAISS CPU dùng cùng profile `offline-local` và chạy theo
+`docs/FAISS_INDEX_RUNBOOK.md`; không cài FAISS vào environment Kaggle chỉ để build local.
+
 Trên Windows sạch, `scripts/bootstrap_miniforge_windows.ps1` là entry point khuyến nghị:
 nó cài Miniforge đã pin dưới `%LOCALAPPDATA%\LASTDANCE\toolchains`, tạo `.venv-offline`
 từ `environment.yml` và chạy doctor/test. Base toolchain tránh path có khoảng trắng theo
