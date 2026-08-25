@@ -69,6 +69,11 @@ Doctor phải PASS Python 3.11, package pin và CUDA/T4. `kaggle-gpu.txt` không
 không thay wheel CUDA có sẵn của Kaggle. Nếu pip resolver muốn thay Torch, dừng lại và audit,
 không tiếp tục bằng một environment khác contract.
 
+`transformers==5.15.1` yêu cầu `huggingface-hub>=1.5.0` và `safetensors>=0.8.0`; các pin
+trong `kaggle-gpu.txt` phải thỏa đồng thời hai constraint này. Nếu pip báo
+`ResolutionImpossible`, chạy lại không có `-q` để lưu toàn bộ dependency chain; không dùng
+`--no-deps` hoặc bỏ qua environment doctor để cưỡng ép inference.
+
 Revision verifier gọi API thật bằng `huggingface_hub.model_info(model_id, revision=...)` và
 yêu cầu repository ID + SHA resolve khớp tuyệt đối với registry; kiểm tra 40 ký tự hex trong
 unit test không thay thế bước này. BEiT-3 đang blocked nên chưa được gọi API ở gate hiện tại.

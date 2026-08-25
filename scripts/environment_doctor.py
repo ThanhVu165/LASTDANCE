@@ -62,8 +62,8 @@ _PROFILE_PACKAGES = {
         "transformers": ("transformers", "5.15.1"),
         "accelerate": ("accelerate", "1.14.0"),
         "sentence-transformers": ("sentence_transformers", "6.0.0"),
-        "huggingface-hub": ("huggingface_hub", "1.3.5"),
-        "safetensors": ("safetensors", "0.6.2"),
+        "huggingface-hub": ("huggingface_hub", "1.28.0"),
+        "safetensors": ("safetensors", "0.8.0"),
         "sentencepiece": ("sentencepiece", "0.2.1"),
     },
 }

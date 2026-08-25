@@ -200,6 +200,19 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 ---
 
+### [26/08/2026] Sửa pin dependency Kaggle Visual
+
+- Kaggle resolver phát hiện `requirements/kaggle-gpu.txt` khóa
+  `huggingface-hub==1.3.5` và `safetensors==0.6.2`, mâu thuẫn trực tiếp với metadata của
+  `transformers==5.15.1` (`huggingface-hub>=1.5.0`, `safetensors>=0.8.0`).
+- Nâng pin tương ứng lên `huggingface-hub==1.28.0` và `safetensors==0.8.0`, đồng bộ
+  environment doctor và Visual runbook. Pip resolver dry-run trên Python 3.11 PASS; Kaggle
+  clean-install/doctor/inference thật vẫn cần chạy lại trước khi coi gate môi trường PASS.
+- Thay đổi hiện chỉ ở working tree; chưa commit, chưa push và không được coi là provenance
+  Kaggle chính thức cho tới khi chủ repo yêu cầu rõ hai hành động đó.
+
+---
+
 ### Đang làm dở (task hiện tại, nếu có)
 
 - Task hiện tại: hoàn tất keyframe plan → exact extraction → quality → `frames.csv` cho
