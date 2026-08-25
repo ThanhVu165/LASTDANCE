@@ -32,6 +32,15 @@ wire vào dispatch logic mới.
 - Batch runner có checkpoint riêng theo worker/device/output namespace: ghi `0/1` trước
   inference và chỉ ghi `1/1` sau atomic publish + validation. Resume xử lý được cả ngắt
   giữa inference lẫn crash-window sau publish; complete state thiếu manifest sẽ fail closed.
+- Visual embedding builder chạy độc lập từng modality, khóa model revision + catalog/UID +
+  batch size trong signature, ghi shard atomic với UID `int64`, vector L2-normalized
+  `float16` và chỉ publish final manifest sau khi scan/hash/health check đủ shard.
+- CLIP/SigLIP có adapter Kaggle CUDA và revision Hugging Face bất biến đã verify; BEiT-3
+  fail-closed chờ official Microsoft UniLM retrieval checkpoint, không thay bằng BEiT
+  thường. Intentional stop/resume phải được chứng minh bằng hai process thật.
+- FAISS builder chạy CPU local bằng `IndexIDMap(IndexFlatIP)`, add batch video rời nhau theo
+  `keyframe_uid`, không chờ modality khác. Sidecar SHA-bound và validator diff ID/vector thật
+  với `frames.csv`; source overlap hoặc khác model/catalog/dimension bị từ chối.
 - Keyframe plan chọn Begin/Middle/End theo timestamp frame thật từ `ffprobe`, dedup shot
   ngắn và sinh `FrameRecord` với path tương đối dưới `AIC_DATA`. Builder load manifest v2
   qua validator, truyền `excluded_transition_ranges` tường minh cho planner và planner
@@ -61,7 +70,9 @@ wire vào dispatch logic mới.
 ## Kiểm thử
 
 - Compile `offline shared scripts tests`: pass.
-- Test Nhánh 1: 72/72 pass bằng Python 3.11.9 và `.venv-shot-gpu` ngày 25/08/2026.
+- Test Nhánh 1: 87/87 pass bằng Python 3.11.9 trên nền hợp nhất
+  `origin/codex/offline-shot-detection@02d6d3e` ngày 25/08/2026. Đây gồm test batch
+  Shot/Keyframe/Catalog mới và 15 test Visual Embedding/FAISS.
 - Compile legacy `backend/app`: pass.
 - Không chạy được toàn bộ backend test trong môi trường hiện tại vì thiếu `fastapi` và
   `opencv-python`; đây là dependency-environment blocker, không phải regression đã quan sát.
@@ -163,7 +174,8 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
   mỗi shard có checkpoint/report/extraction state riêng.
 - Ngưỡng blur/pHash production chưa chốt vì visual audit chưa thay thế ground-truth A/B.
   Cosine dedup chờ embedding và không nằm trên critical path hiện tại.
-- Chưa build CLIP/SigLIP/BEiT-3 embedding hoặc FAISS `IndexIDMap`.
+- Chưa sinh CLIP/SigLIP/BEiT-3 embedding hoặc FAISS `IndexIDMap` bằng model/dữ liệu thật.
+  Code builder/validator/runbook đã có và synthetic regression PASS; BEiT-3 còn blocked.
 - Chưa có `ocr.sqlite` hoặc `asr.sqlite`.
 - Chưa dùng Kaggle/Colab hoặc push Hugging Face Dataset. Windows CUDA local đã dùng cho shot
   batch; `.venv-shot-gpu` chỉ là environment shot detection, không thay thế environment
@@ -175,8 +187,11 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 1. Chờ hai shard keyframe hoàn tất và xác minh đủ 873 plan/quality cùng JPEG không rỗng.
 2. Chạy `scripts.build_frames_catalog --collection`; lệnh chỉ publish khi inventory,
    plan và quality khớp chính xác toàn collection.
-3. Tạo embedding builders, build ba FAISS `IndexIDMap` độc lập và diff `keyframe_uid`.
-4. Chốt ngưỡng blur/pHash bằng ground-truth A/B; không filter mù artifact report-only.
+3. Khi catalog production PASS, chạy CLIP/SigLIP Kaggle theo gate exit 75 → process mới
+   resume → validator; BEiT-3 chỉ chạy sau khi chốt checkpoint chính thức.
+4. Tải modality hoàn tất về local và build FAISS modality đó ngay, không đợi hai modality
+   còn lại; validator diff `keyframe_uid` theo video.
+5. Chốt ngưỡng blur/pHash bằng ground-truth A/B; không filter mù artifact report-only.
 
 ## Log phiên
 
@@ -194,6 +209,8 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
   fail-closed; 72/72 test PASS.
 - Hai shard keyframe disjoint đang chạy. Sau khi cả hai report `complete=true`, build và
   validate `scripts.build_frames_catalog --collection`.
+- Branch Visual đã được dựng lại từ nền Shot/Keyframe mới `02d6d3e`; 87/87 test PASS. Code
+  có thể đưa lên Kaggle sau khi push lại branch và catalog/input dev hoặc production sẵn sàng.
 - **Lệnh để tự kiểm tra trạng thái thật** (không tin lời mô tả, chạy lại):
   ```powershell
   git status --short
@@ -252,10 +269,26 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 ### Việc CHƯA làm, ưu tiên tiếp theo
 
-1. Chạy parity CPU–Windows CUDA đủ 5 video; chưa treo batch 873 trước khi 5/5 PASS.
-2. Build CLIP/SigLIP/BEiT-3 embedding theo batch trên Kaggle, output float16 có signature.
-3. Build ba FAISS `IndexIDMap` độc lập và diff UID với dev `frames.csv`.
-4. Chạy ground-truth A/B trước khi bật blur/pHash filter hoặc đổi detector.
+1. Hoàn tất và validate hai shard keyframe 437 + 436 video.
+2. Build `frames.csv --collection` và xác minh inventory/plan/quality membership 873/873.
+3. Chạy CLIP/SigLIP trên Kaggle bằng artifact float16 + real checkpoint/resume gate.
+4. Chốt official BEiT-3 retrieval checkpoint + checksum rồi mới bật modality.
+5. Build FAISS độc lập cho modality đã xong và diff UID thật với catalog.
+6. Chạy ground-truth A/B trước khi bật blur/pHash filter hoặc đổi detector.
+
+### [25/08/2026] Phiên #11
+- Theo yêu cầu người dùng, xóa remote branch Visual cũ sau khi lưu backup local
+  `codex/backup-visual-pre-refresh-20260825@f8d421f`; không mất đường phục hồi.
+- Fetch/pull nền mới `origin/codex/offline-shot-detection@02d6d3e`, gồm Shot Detection đã
+  accepted 873/873 và code batch Keyframe/Catalog mới. Đọc lại toàn bộ baseline/offline/ASR
+  spec cùng Shot runbook trước khi tích hợp.
+- Tạo lại `codex/offline-visual-embeddings` từ `02d6d3e`, áp code Visual/FAISS thành commit
+  `21bdbbe`. README là conflict duy nhất; đã giữ cả nguồn chuẩn mới, checkpoint Shot và hai
+  runbook Visual/FAISS, không ghi đè nguyên một phía.
+- Doctor `offline-local`, compile, `git diff --check` và toàn bộ 87/87 test PASS trên nền
+  hợp nhất. Chưa chạy Kaggle/model thật, chưa sinh vector/index và BEiT-3 vẫn fail-closed.
+- Trạng thái này được commit riêng trước khi push lại branch; remote SHA phải được đối chiếu
+  với local sau push.
 
 ### [24/08/2026] Phiên #10
 - Ghi production gate Windows GPU thành BLOCKED rõ ràng: 60/60 unit test không phải parity
