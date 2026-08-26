@@ -31,7 +31,7 @@ video
   -> inventory bằng ffprobe
   -> shot detection (TransNetV2; production chạy GPU sau parity, CPU làm reference)
   -> 3 keyframe/shot + blur/dedup filtering
-  -> CLIP + SigLIP + BEiT-3 vector riêng cho từng keyframe
+  -> CLIP + SigLIP + EVA-CLIP vector riêng cho từng keyframe
   -> frames.csv + 3 FAISS IndexIDMap + ocr.sqlite
 
 audio
@@ -40,7 +40,7 @@ audio
   -> asr.sqlite
 ```
 
-Nhánh online sẽ gộp SigLIP + BEiT-3 bằng SRRF thành đúng một `score_visual`; CLIP là
+Nhánh online sẽ gộp SigLIP + EVA-CLIP bằng SRRF thành đúng một `score_visual`; CLIP là
 rollback. Sau đó mới fusion visual/OCR/ASR. Nhánh 1 không build index visual đã gộp.
 
 ## Cấu trúc repo trong giai đoạn migration
@@ -70,9 +70,9 @@ Laplacian/pHash quality manifest, `frames.csv` catalog builder và visual embedd
 builder cùng FAISS `IndexIDMap` builder/validator fail-closed. Weight
 TransNetV2 bundle trong package pin và được kiểm tra SHA-256 trước load; không tải weight
 trong lúc xử lý video. Batch runner có checkpoint/resume riêng theo từng video và chỉ nâng
-trạng thái sau khi manifest đã atomic-publish rồi validate lại. CLIP/SigLIP adapter chưa
-chạy Kaggle thật; BEiT-3 còn khóa chờ chốt official checkpoint. OCR GPU chưa chạy trong lát
-cắt này.
+trạng thái sau khi manifest đã atomic-publish rồi validate lại. CLIP/SigLIP đã qua dev gate
+Kaggle T4; EVA-CLIP phải qua dev-subset interrupt/resume/validate trước production. OCR GPU
+chưa chạy trong lát cắt này.
 
 ## Invariant quan trọng
 

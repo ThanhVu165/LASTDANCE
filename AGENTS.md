@@ -48,7 +48,7 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 
 ### Việc thuộc phạm vi:
 - `offline/` — TransNetV2 shot detection, keyframe extraction, dedup/lọc nhiễu, visual
-  embedding (CLIP/SigLIP/BEiT-3), OCR (Gemini + EasyOCR fallback), build FAISS + SQLite FTS5.
+  embedding (CLIP/SigLIP/EVA-CLIP), OCR (Gemini + EasyOCR fallback), build FAISS + SQLite FTS5.
 - `shared/schemas/` — Pydantic schema dùng chung (`FrameRecord`, `OcrResult`, `AsrSegment`)
   — sửa ở đây ảnh hưởng cả 2 nhánh, cần cẩn trọng và thông báo khi đổi.
 - `scripts/` — script chạy batch trên Kaggle, tách nhỏ danh sách video song song.
@@ -71,7 +71,7 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 6. **Không giả định VRAM vô hạn** — 6GB VRAM local, phải ghi rõ ước tính và cơ chế
    load/release model theo pha nếu chạy local.
 7. **Vector bắt buộc ép `float16`** trước khi lưu/push (giảm dung lượng + băng thông HF).
-8. **3 FAISS index (CLIP/SigLIP/BEiT-3) build độc lập, không cần đồng bộ thời gian/thứ tự**
+8. **3 FAISS index (CLIP/SigLIP/EVA-CLIP) build độc lập, không cần đồng bộ thời gian/thứ tự**
    — vì dùng `keyframe_uid` làm khóa qua `IndexIDMap`.
 9. **Một `video_id` chỉ `complete = true` khi thỏa đủ Publishing Criteria** (mục 6 dưới) —
    không set `complete=true` khi còn checkpoint dở dang, không được bỏ bớt điều kiện để
@@ -86,7 +86,7 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
   cùng commit/config và toàn bộ 5 video dev-subset đã qua parity 100% từng shot/range với
   manifest CPU. CUDA phải được chọn tường minh, ghi provenance và fail closed; tuyệt đối
   không fallback âm thầm về CPU.
-- **Embedding (CLIP/SigLIP/BEiT-3) + OCR fallback (EasyOCR)** → chạy **Kaggle GPU theo
+- **Embedding (CLIP/SigLIP/EVA-CLIP) + OCR fallback (EasyOCR)** → chạy **Kaggle GPU theo
   batch**. Quota Kaggle free: **30h/tuần** — Nhánh 1 và Nhánh 3 (ASR) dùng **2 tài khoản
   Kaggle/Colab riêng biệt**, không tranh chấp quota với nhau.
 - **Đồng bộ artifact Kaggle ↔ máy local** qua **HuggingFace Dataset (Git LFS)**:
@@ -127,6 +127,8 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
   validate lại thành công.
 - **EasyOCR full 873 video có thể không kịp 6 ngày** — ưu tiên Gemini API OCR trước,
   EasyOCR chạy nền song song làm fallback, không chặn critical path.
+- **BEiT-3 đã bị loại vĩnh viễn khỏi kiến trúc.** Không mở lại audit/checksum/conversion
+  Microsoft UniLM; modality thứ ba chính thức là EVA-CLIP với checkpoint safetensors đã pin.
 - **Thể lệ AIC 2026 có internet trong phòng thi hay không — CHƯA XÁC NHẬN.** Ảnh hưởng trực
   tiếp đến việc Gemini API (OCR + Query Planning) là primary hay phải coi Qwen3-VL local là
   primary thật sự. Không code phần phụ thuộc giả định "chắc chắn có internet" cho đến khi
@@ -144,7 +146,7 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 - Không tự thêm audio captioning phi ngôn ngữ (BEATs) hay speaker diarization — đã bị cắt
   khỏi scope Nhánh 3 để kịp deadline.
 - Không tự ý build thêm 1 visual index đã gộp sẵn (SRRF) ở Nhánh 1 — việc gộp 3 điểm
-  CLIP/SigLIP/BEiT-3 thành `score_visual` là việc của Nhánh 2 lúc query, không phải lúc index.
+  CLIP/SigLIP/EVA-CLIP thành `score_visual` là việc của Nhánh 2 lúc query, không phải lúc index.
 - Không đổi tên cột SQL giữa `ocr.sqlite` và `asr.sqlite` trái
   `docs/BASELINE_SPEC.md` §2.1d/§2A.3; giữ `detected_text` và `transcribed_text` để Nhánh 2
   dùng chung một module `FtsSearcher`.

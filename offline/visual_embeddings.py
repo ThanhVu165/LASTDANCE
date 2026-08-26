@@ -27,7 +27,7 @@ from offline.catalog import FRAME_COLUMNS, validate_frames_catalog
 from shared.schemas.frame import FrameRecord
 
 
-SUPPORTED_MODALITIES = ("clip", "siglip", "beit3")
+SUPPORTED_MODALITIES = ("clip", "siglip", "eva_clip")
 SCHEMA_VERSION = 1
 _NORM_ATOL = 5e-3
 _PROCESS_TOKEN = f"pid-{os.getpid()}-{uuid.uuid4().hex}"

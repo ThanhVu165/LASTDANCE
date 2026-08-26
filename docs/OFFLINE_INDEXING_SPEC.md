@@ -13,7 +13,7 @@
 
 1. Mỗi keyframe có vector riêng — **không** mean-pooling nhiều keyframe/shot thành 1 vector
    (làm mất khả năng trả đúng `frame_id` cụ thể mà KIS yêu cầu).
-2. Ba FAISS index (CLIP/SigLIP/BEiT-3) dùng khóa **`keyframe_uid`** (deterministic hash, xem
+2. Ba FAISS index (CLIP/SigLIP/EVA-CLIP) dùng khóa **`keyframe_uid`** (deterministic hash, xem
    mục 3.2a) qua `IndexIDMap` — **không** dùng vị trí insert (`row index`) làm khóa. Nhờ vậy
    3 worker/máy khác nhau có thể build 3 modality độc lập, không đồng bộ thời gian/thứ tự.
 3. Không hardcode path tuyệt đối — mọi đường dẫn build từ biến môi trường `AIC_DATA`.
@@ -42,7 +42,7 @@ Chạy **Kaggle GPU** theo batch.
 
 | Bước | Model | Hành động | Output |
 |---|---|---|---|
-| 2.1 Visual Embedding | **CLIP ViT-B/32** (baseline/rollback) + **SigLIP** + **BEiT-3** | Chạy song song 3 model, lấy vector cho **từng keyframe riêng lẻ**. **Bắt buộc ép về `float16`** trước khi lưu file (giảm 50% dung lượng, giảm băng thông push/pull HF Dataset — xem mục 6) | `.npy`/`.bin`, dtype `float16` |
+| 2.1 Visual Embedding | **CLIP ViT-B/32** (baseline/rollback) + **SigLIP** + **EVA-CLIP** | Chạy song song 3 model, lấy vector cho **từng keyframe riêng lẻ**. **Bắt buộc ép về `float16`** trước khi lưu file (giảm 50% dung lượng, giảm băng thông push/pull HF Dataset — xem mục 6) | `.npy`/`.bin`, dtype `float16` |
 | 2.2 OCR Extraction | **Gemini 2.5 Flash-Lite API** (primary) / **EasyOCR** (fallback offline) | Đọc chữ tĩnh trên keyframe (biển hiệu, logo, chữ chạy) theo JSON prompt schema cố định — dùng chung `OcrResult` với `BASELINE_SPEC.md` §2.2 | `.json`/keyframe: `{"frame_id": ..., "detected_text": [...], "bbox": [...], "confidence": 0.95, "language": "vi"}` |
 
 ---
@@ -54,7 +54,7 @@ Chạy **Local**.
 | Bước | Công cụ | Hành động | Output |
 |---|---|---|---|
 | 3.1 Unified Catalog | Python (Pandas) | Ánh xạ toàn bộ metadata frame vào catalog trung tâm duy nhất — xem schema đầy đủ ở mục 3.1a | **`frames.csv`** |
-| 3.2 Vector DB Build | FAISS `IndexFlatIP` + `IndexIDMap` | Chuẩn hóa L2, build 3 index **độc lập** — khóa bằng `keyframe_uid`, không cần cùng thứ tự (xem 3.2a) | `clip.faiss`, `beit3.faiss`, `siglip.faiss` |
+| 3.2 Vector DB Build | FAISS `IndexFlatIP` + `IndexIDMap` | Chuẩn hóa L2, build 3 index **độc lập** — khóa bằng `keyframe_uid`, không cần cùng thứ tự (xem 3.2a) | `clip.faiss`, `eva_clip.faiss`, `siglip.faiss` |
 | 3.3 Text DB Build | SQLite FTS5 | Nạp dữ liệu OCR vào bảng ảo hỗ trợ Full-Text Search (BM25) — schema ở mục 3.3a | `ocr.sqlite` |
 
 ### 3.3a Schema SQL `ocr.sqlite` — cấu trúc chuẩn, đối chiếu với `asr.sqlite` (`ASR_SPEC.md` §3.2)
@@ -109,7 +109,7 @@ index.add_with_ids(vectors, keyframe_uids)  # không quan tâm thứ tự add
 ```
 
 **Lợi ích so với ràng buộc thứ tự cũ:**
-- 3 index (`clip.faiss`, `beit3.faiss`, `siglip.faiss`) build độc lập, không đồng bộ thời
+- 3 index (`clip.faiss`, `eva_clip.faiss`, `siglip.faiss`) build độc lập, không đồng bộ thời
   gian/thứ tự — mỗi worker Kaggle chạy xong modality nào add luôn modality đó.
 - Thiếu 1 modality cho 1 video: phát hiện bằng cách diff tập `keyframe_uid` trong file
   `.faiss` với tập trong `frames.csv` thuộc đúng `video_id` — không lan ra toàn catalog.
@@ -123,11 +123,11 @@ index.add_with_ids(vectors, keyframe_uids)  # không quan tâm thứ tự add
 ## 4. Data Contract — bàn giao cho Nhánh 2
 
 1. **`frames.csv`** — trục join bắt buộc, schema đầy đủ ở mục 3.1a.
-2. **`clip.faiss` / `beit3.faiss` / `siglip.faiss`** — index frame-level, khóa bằng
+2. **`clip.faiss` / `eva_clip.faiss` / `siglip.faiss`** — index frame-level, khóa bằng
    `keyframe_uid` qua `IndexIDMap` (mục 3.2a), độc lập thời gian build.
 
    > **Lưu ý ranh giới trách nhiệm:** Nhánh 1 chỉ bàn giao **3 file `.faiss` độc lập**, không
-   > build sẵn 1 index visual đã gộp. Việc gộp 3 điểm số (SRRF cho SigLIP+BEiT-3, CLIP làm
+   > build sẵn 1 index visual đã gộp. Việc gộp 3 điểm số (SRRF cho SigLIP+EVA-CLIP, CLIP làm
    > rollback khi thiếu index) là việc của Nhánh 2 tại thời điểm query — xem
    > `BASELINE_SPEC.md` §3.2 tầng 1. Không cần thêm bước xử lý nào ở Nhánh 1 cho việc này.
 3. **`ocr.sqlite`** — toàn bộ text OCR, tìm kiếm BM25.
@@ -141,7 +141,7 @@ Một bộ index chỉ được Nhánh 2 sử dụng khi thỏa **toàn bộ** �
 để tiết kiệm thời gian):
 
 - [ ] `complete = true` (điền theo từng `video_id`, không phải toàn catalog — một video có
-      thể publish xong CLIP trước, SigLIP/BEiT-3 sau)
+      thể publish xong CLIP trước, SigLIP/EVA-CLIP sau)
 - [ ] Với mỗi `video_id` đã đánh dấu complete: tập `keyframe_uid` trong `frames.csv` khớp
       100% với tập ID đã add vào **cả 3** file FAISS (diff bằng code, không đếm số dòng thô)
 - [ ] Không có `NaN`/`Inf` trong bất kỳ vector nào
@@ -195,3 +195,7 @@ Kaggle Notebook (build) --push_to_hub()--> HF Dataset (Git LFS) --snapshot_downl
   Nhánh 2 (không phải Nhánh 1). Thêm ghi chú ở mục 4 làm rõ Nhánh 1 **không** cần build thêm
   index gộp — chỉ bàn giao đúng 3 file `.faiss` độc lập như cũ, tránh người phụ trách Nhánh 1
   làm trùng việc với Nhánh 2.
+- **26/08/2026 (bản 4)** — Loại vĩnh viễn BEiT-3 và thay modality thứ ba bằng EVA-CLIP.
+  Contract bàn giao đổi trực tiếp từ `beit3.faiss` sang `eva_clip.faiss`; công thức
+  `keyframe_uid`, `IndexIDMap`, khả năng build độc lập và toàn bộ Publishing Criteria giữ
+  nguyên.

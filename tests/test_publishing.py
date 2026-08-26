@@ -1,12 +1,17 @@
 import unittest
 
 from offline.publishing import (
+    REQUIRED_VISUAL_INDEXES,
     VectorHealth,
     assess_publishing_readiness,
 )
+from offline.visual_embeddings import SUPPORTED_MODALITIES
 
 
 class PublishingCriteriaTests(unittest.TestCase):
+    def test_embedding_and_publishing_modality_contracts_match(self):
+        self.assertEqual(REQUIRED_VISUAL_INDEXES, SUPPORTED_MODALITIES)
+
     def test_video_is_complete_only_when_all_criteria_pass(self):
         healthy = VectorHealth(finite=True, normalized=True)
         report = assess_publishing_readiness(
@@ -15,9 +20,9 @@ class PublishingCriteriaTests(unittest.TestCase):
             index_uids={
                 "clip": {1, 2, 3},
                 "siglip": {1, 2, 3},
-                "beit3": {1, 2, 3},
+                "eva_clip": {1, 2, 3},
             },
-            vector_health={"clip": healthy, "siglip": healthy, "beit3": healthy},
+            vector_health={"clip": healthy, "siglip": healthy, "eva_clip": healthy},
             mapping_verified=True,
             checkpoint_resume_verified=True,
         )
@@ -31,12 +36,12 @@ class PublishingCriteriaTests(unittest.TestCase):
             index_uids={
                 "clip": {1, 2, 3},
                 "siglip": {1, 2},
-                "beit3": {1, 2, 3},
+                "eva_clip": {1, 2, 3},
             },
             vector_health={
                 "clip": VectorHealth(True, True),
                 "siglip": VectorHealth(True, True),
-                "beit3": VectorHealth(True, False),
+                "eva_clip": VectorHealth(True, False),
             },
             mapping_verified=True,
             checkpoint_resume_verified=True,
@@ -49,8 +54,8 @@ class PublishingCriteriaTests(unittest.TestCase):
         report = assess_publishing_readiness(
             video_id="empty",
             frame_uids=set(),
-            index_uids={"clip": set(), "siglip": set(), "beit3": set()},
-            vector_health={"clip": healthy, "siglip": healthy, "beit3": healthy},
+            index_uids={"clip": set(), "siglip": set(), "eva_clip": set()},
+            vector_health={"clip": healthy, "siglip": healthy, "eva_clip": healthy},
             mapping_verified=True,
             checkpoint_resume_verified=True,
         )

@@ -9,10 +9,11 @@ Local/Shot target runtime is CPython 3.11.9. Kaggle Visual target runtime is CPy
 | `offline-local.txt` | inventory, TransNetV2 CPU, filtering, FAISS build | local Windows/Linux |
 | `shot-windows-gpu.txt` | TransNetV2 CUDA 12.6, Torch 2.12.1 | Windows NVIDIA GPU |
 | `shot-colab-gpu.txt` | TransNetV2 CUDA shot detection, giữ Torch có sẵn | Google Colab T4 |
-| `kaggle-gpu.txt` | CLIP/SigLIP/BEiT-3 batch embedding | Kaggle GPU |
+| `kaggle-gpu.txt` | CLIP/SigLIP/EVA-CLIP batch embedding | Kaggle GPU |
 
 Kaggle visual embedding phải theo `docs/VISUAL_EMBEDDING_RUNBOOK.md`. Profile hiện chạy
-CLIP/SigLIP dev candidate; BEiT-3 vẫn fail-closed chờ official UniLM retrieval checkpoint.
+CLIP/SigLIP đã qua dev gate. EVA-CLIP dùng `open-clip-torch==3.3.0`, `timm==1.0.28` và
+checkpoint `.safetensors` đã pin; vẫn phải qua dev-subset CUDA gate trước production.
 Sau khi tải embedding artifact về, FAISS CPU dùng cùng profile `offline-local` và chạy theo
 `docs/FAISS_INDEX_RUNBOOK.md`; không cài FAISS vào environment Kaggle chỉ để build local.
 

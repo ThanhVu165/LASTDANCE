@@ -4,7 +4,7 @@ Tài liệu này là entry point cho bước 3.2 của `OFFLINE_INDEXING_SPEC.md
 đã hoàn tất → `IndexIDMap(IndexFlatIP)`. Bước này chạy **CPU local**, không dùng quota
 Kaggle và không ảnh hưởng worker Shot Detection.
 
-Mỗi lệnh chỉ build đúng một trong `clip`, `siglip`, `beit3`. Không chờ ba modality hoàn tất
+Mỗi lệnh chỉ build đúng một trong `clip`, `siglip`, `eva_clip`. Không chờ ba modality hoàn tất
 cùng lúc và không làm SRRF/CLIP rollback; các logic đó thuộc Nhánh 2 online.
 
 ## 1. Input bắt buộc
@@ -95,7 +95,7 @@ Khi `batch-02/clip` hoàn tất cho tập video không giao với batch trước
 Builder validate lại index cũ trước khi add. Cùng source signature **và digest nội dung** đã
 add thì lệnh là no-op; cùng signature nhưng vector khác hoặc source signature mới có UID
 chồng index cũ đều fail closed. Không xóa/rebuild
-`siglip.faiss` hoặc `beit3.faiss`.
+`siglip.faiss` hoặc `eva_clip.faiss`.
 
 Có thể truyền nhiều batch rời nhau trong một lệnh bằng cách lặp `--embedding-dir`:
 
@@ -104,7 +104,7 @@ Có thể truyền nhiều batch rời nhau trong một lệnh bằng cách lặ
 ```
 
 Ba modality có thể publish theo thứ tự bất kỳ. Ví dụ CLIP xong trước thì build/validate
-`clip.faiss` ngay; không cần đợi SigLIP và BEiT-3.
+`clip.faiss` ngay; không cần đợi SigLIP và EVA-CLIP.
 
 ## 5. Validate độc lập
 

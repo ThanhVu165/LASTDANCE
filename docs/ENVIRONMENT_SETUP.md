@@ -12,7 +12,7 @@ và không được trộn dependency vào `.venv-offline`.
 | Offline local | `requirements/offline-local.txt` | inventory, shot detection CPU, filter, FAISS |
 | Shot Windows GPU | `requirements/shot-windows-gpu.txt` | TransNetV2 CUDA 12.6, Torch 2.12.1 |
 | Shot Colab GPU | `requirements/shot-colab-gpu.txt` | TransNetV2 CUDA, giữ Torch có sẵn của Colab |
-| Kaggle GPU | `requirements/kaggle-gpu.txt` | CLIP/SigLIP/BEiT-3 batch embedding |
+| Kaggle GPU | `requirements/kaggle-gpu.txt` | CLIP/SigLIP/EVA-CLIP batch embedding |
 
 Không cài profile Kaggle lên máy local chỉ để chạy preprocessing. Kaggle đã có PyTorch khớp
 CUDA; không được để requirements chung tự thay wheel PyTorch của notebook.

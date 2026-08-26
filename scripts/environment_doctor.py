@@ -73,6 +73,9 @@ _PROFILE_PACKAGES = {
         "huggingface-hub": ("huggingface_hub", "1.28.0"),
         "safetensors": ("safetensors", "0.8.0"),
         "sentencepiece": ("sentencepiece", "0.2.1"),
+        "torchvision": ("torchvision", None),
+        "open-clip-torch": ("open_clip", "3.3.0"),
+        "timm": ("timm", "1.0.28"),
     },
 }
 

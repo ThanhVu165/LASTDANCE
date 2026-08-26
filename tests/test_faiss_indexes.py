@@ -142,7 +142,7 @@ class FaissIndexTests(unittest.TestCase):
             self.assertEqual(initial.added_records, 3)
             self.assertEqual(initial.report.video_count, 1)
             self.assertFalse((root / "index" / "siglip.faiss").exists())
-            self.assertFalse((root / "index" / "beit3.faiss").exists())
+            self.assertFalse((root / "index" / "eva_clip.faiss").exists())
 
             updated = build_faiss_index(
                 modality="clip",

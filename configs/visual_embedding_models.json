@@ -14,12 +14,24 @@
     "revision": "7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed",
     "source": "https://huggingface.co/google/siglip-base-patch16-224"
   },
+  "eva_clip": {
+    "status": "dev_candidate",
+    "backend": "open_clip_eva",
+    "model_id": "timm/eva02_large_patch14_clip_224.merged2b_s4b_b131k",
+    "revision": "bf4190eb65dd5204ffb03e980108beb1200e0873",
+    "weights_filename": "open_clip_model.safetensors",
+    "weights_sha256": "00af04296f09f24dcc69559440a80b7a44daf4855a72827e016067e6e571b851",
+    "weights_size_bytes": 855584096,
+    "expected_vector_dim": 768,
+    "license": "MIT",
+    "source": "https://huggingface.co/timm/eva02_large_patch14_clip_224.merged2b_s4b_b131k"
+  },
   "beit3": {
     "status": "blocked_model_selection",
     "backend": "microsoft_unilm_beit3",
     "model_id": null,
     "revision": null,
     "source": "https://github.com/microsoft/unilm/tree/master/beit3",
-    "reason": "The official BEiT-3 release uses UniLM code/checkpoints; microsoft/beit-* Hugging Face models are BEiT, not BEiT-3. Select and checksum an official retrieval checkpoint before enabling this modality."
+    "reason": "BEiT-3 is permanently retired from the LASTDANCE architecture and replaced by eva_clip. Do not reopen checkpoint selection, audit, conversion, or adapter work for this modality."
   }
 }

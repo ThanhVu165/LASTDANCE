@@ -185,7 +185,7 @@ class VisualEmbeddingTests(unittest.TestCase):
             self.assertTrue(result.complete)
             self.assertTrue((root / "embeddings" / "batch-01" / "clip" / "manifest.json").is_file())
             self.assertFalse((root / "embeddings" / "batch-01" / "siglip").exists())
-            self.assertFalse((root / "embeddings" / "batch-01" / "beit3").exists())
+            self.assertFalse((root / "embeddings" / "batch-01" / "eva_clip").exists())
             with self.assertRaisesRegex(RuntimeError, "has not been verified"):
                 validate_completed_visual_embedding(
                     result.output_dir,
@@ -300,37 +300,79 @@ class VisualEmbeddingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "zero"):
             normalize_vectors(np.zeros((1, 3)), expected_rows=1)
 
-    def test_beit3_config_is_explicitly_blocked_not_substituted_with_beit(self):
+    def test_eva_clip_is_pinned_and_beit3_is_permanently_retired(self):
         clip = load_model_config("clip")
         siglip = load_model_config("siglip")
+        eva_clip = load_model_config("eva_clip")
         self.assertEqual(clip["model_id"], "openai/clip-vit-base-patch32")
         self.assertEqual(len(clip["revision"]), 40)
         self.assertEqual(siglip["model_id"], "google/siglip-base-patch16-224")
         self.assertEqual(len(siglip["revision"]), 40)
-        with self.assertRaisesRegex(RuntimeError, "official BEiT-3"):
+        self.assertEqual(
+            eva_clip["model_id"],
+            "timm/eva02_large_patch14_clip_224.merged2b_s4b_b131k",
+        )
+        self.assertEqual(eva_clip["weights_filename"], "open_clip_model.safetensors")
+        self.assertEqual(eva_clip["expected_vector_dim"], 768)
+        with self.assertRaisesRegex(RuntimeError, "permanently retired"):
             load_model_config("beit3")
 
     def test_model_revision_verifier_requires_exact_hugging_face_resolution(self):
         calls = []
 
-        def exact_loader(model_id, *, revision):
+        def exact_loader(model_id, *, revision, files_metadata):
             calls.append((model_id, revision))
-            return SimpleNamespace(id=model_id, sha=revision)
+            self.assertTrue(files_metadata)
+            siblings = []
+            if model_id.startswith("timm/eva02"):
+                siblings.append(
+                    SimpleNamespace(
+                        rfilename="open_clip_model.safetensors",
+                        size=855584096,
+                        lfs=SimpleNamespace(
+                            sha256=(
+                                "00af04296f09f24dcc69559440a80b7a44daf4855a72827e016067e6e571b851"
+                            ),
+                            size=855584096,
+                        ),
+                    )
+                )
+            return SimpleNamespace(id=model_id, sha=revision, siblings=siblings)
 
         results = verify_visual_model_revisions(
             Path("configs/visual_embedding_models.json"),
             model_info_loader=exact_loader,
         )
-        self.assertEqual([row["modality"] for row in results], ["clip", "siglip"])
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            [row["modality"] for row in results], ["clip", "siglip", "eva_clip"]
+        )
+        self.assertEqual(len(calls), 3)
 
-        def mismatched_loader(model_id, *, revision):
+        def mismatched_loader(model_id, *, revision, files_metadata):
             return SimpleNamespace(id=model_id, sha="f" * 40)
 
         with self.assertRaisesRegex(RuntimeError, "revision mismatch"):
             verify_visual_model_revisions(
                 Path("configs/visual_embedding_models.json"),
                 model_info_loader=mismatched_loader,
+            )
+
+        def wrong_eva_weights_loader(model_id, *, revision, files_metadata):
+            siblings = []
+            if model_id.startswith("timm/eva02"):
+                siblings.append(
+                    SimpleNamespace(
+                        rfilename="open_clip_model.safetensors",
+                        size=855584096,
+                        lfs=SimpleNamespace(sha256="0" * 64, size=855584096),
+                    )
+                )
+            return SimpleNamespace(id=model_id, sha=revision, siblings=siblings)
+
+        with self.assertRaisesRegex(RuntimeError, "safetensors metadata"):
+            verify_visual_model_revisions(
+                Path("configs/visual_embedding_models.json"),
+                model_info_loader=wrong_eva_weights_loader,
             )
 
 

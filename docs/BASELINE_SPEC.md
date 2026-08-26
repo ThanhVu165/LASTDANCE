@@ -30,7 +30,7 @@ khớp image Kaggle thay vì cài đè wheel chung.
    load/release theo pha nếu cần.
 7. **Không tự ý đổi FPS, resolution, hoặc thời lượng video là hằng số** — các giá trị này
    phải đọc ra từ bước EDA/inventory, không giả định.
-8. **Không cộng trực tiếp điểm CLIP/SigLIP/BEiT-3 vào chung công thức Min-Max liên-modal.**
+8. **Không cộng trực tiếp điểm CLIP/SigLIP/EVA-CLIP vào chung công thức Min-Max liên-modal.**
    3 FAISS index là 3 nguồn điểm riêng, phải gộp về **1** điểm `score_visual` duy nhất trước
    (xem `§3.2` tầng 1) rồi mới đưa vào Late Fusion liên-modal (`§3.2` tầng 2) — nhầm bước này
    sẽ làm sai trọng số `modality_weights["visual"]`.
@@ -87,7 +87,7 @@ video (.mp4)
   └─> [5] Ba visual embedding cho MỖI keyframe (không mean-pool):
           - CLIP ViT-B/32 (baseline / rollback)
           - SigLIP (câu mô tả dài)
-          - BEiT-3 (chi tiết vùng ảnh nhỏ)
+          - EVA-CLIP (visual encoder bổ sung)
           -> chuẩn hóa L2
   └─> [6] OCR mỗi keyframe:
           - Primary: Gemini 2.5 Flash-Lite API (JSON prompt)
@@ -109,7 +109,7 @@ audio (.wav tách từ video)
 | 2 | Shot detection | video | manifest v2 gồm shot + transition range | TransNetV2 (`transnetv2-pytorch==1.0.5`) | GPU production sau parity 100% trên dev-subset; CPU reference/fallback |
 | 3 | Keyframe extraction | shot list | ảnh keyframe (jpg) | `ffmpeg` | 3/shot |
 | 4 | Dedup/quality | keyframe | keyframe đã lọc | OpenCV (Laplacian), pHash | Threshold cần benchmark trên dev subset |
-| 5 | Visual embedding | keyframe | vector CLIP + SigLIP + BEiT-3 | HuggingFace transformers | Batch processing, chạy trên Kaggle GPU |
+| 5 | Visual embedding | keyframe | vector CLIP + SigLIP + EVA-CLIP | Transformers + OpenCLIP | Batch processing, chạy trên Kaggle GPU |
 | 6 | OCR | keyframe | text + bbox | Gemini API / EasyOCR | JSON prompt schema cố định — xem 2.2 |
 | 7 | Indexing | vector + text | FAISS index, SQLite FTS5, frames.csv | `faiss-cpu`, `sqlite3` | IndexFlatIP, chuẩn hóa L2 trước khi add |
 | 8 | ASR (nhánh 3, song song) | audio `.wav` | segment + timestamp | Whisper Large-v3 / phoWhisper | Xem §2A; chạy trên Kaggle/Colab account riêng, không tranh quota với nhánh 1 |
@@ -236,7 +236,7 @@ def make_keyframe_uid(video_id: str, shot_id: str, local_idx: int) -> int:
     return int.from_bytes(digest, "big", signed=False) >> 1
 ```
 
-Không dùng row index/`faiss_row_id` làm khóa. CLIP, SigLIP và BEiT-3 build độc lập bằng
+Không dùng row index/`faiss_row_id` làm khóa. CLIP, SigLIP và EVA-CLIP build độc lập bằng
 `faiss.IndexIDMap(faiss.IndexFlatIP(dim))`; mỗi keyframe có vector riêng, L2-normalize và
 ép `float16` trước khi lưu/push. Nhánh Offline chỉ bàn giao ba index độc lập, không build
 index SRRF đã gộp.
@@ -256,7 +256,7 @@ CREATE VIRTUAL TABLE ocr_fts USING fts5(
 Artifact Nhánh 1:
 
 1. `frames.csv`.
-2. `clip.faiss`, `siglip.faiss`, `beit3.faiss`.
+2. `clip.faiss`, `siglip.faiss`, `eva_clip.faiss`.
 3. `ocr.sqlite`.
 4. Shot/keyframe/quality manifests, checkpoint và publishing state cần cho audit/resume.
 5. Mọi path lưu trong artifact là relative dưới `AIC_DATA`.
@@ -281,7 +281,7 @@ dấu `complete=true` khi thỏa **tất cả**:
 
 - [ ] Shot manifest schema v2 hợp lệ và checkpoint Shot Detection ở `1/1`.
 - [ ] Tập `keyframe_uid` trong `frames.csv` khớp 100% với ID trong **cả ba** FAISS
-      `clip.faiss`, `siglip.faiss`, `beit3.faiss` bằng set diff, không đếm dòng thô.
+      `clip.faiss`, `siglip.faiss`, `eva_clip.faiss` bằng set diff, không đếm dòng thô.
 - [ ] Không có `NaN`/`Inf` trong bất kỳ vector nào.
 - [ ] Vector đã L2-normalize, norm xấp xỉ 1 trên sample kiểm tra.
 - [ ] Mapping `video_id`/`frame_id`/`pts_time` đã sanity-check với video gốc.
@@ -398,9 +398,9 @@ quả rỗng thành “không có thoại”.
                        │
         ┌──────────────┼───────────────────────────┐
         ▼ (Visual)      │                            │
-  clip.faiss  siglip.faiss  beit3.faiss              │
+  clip.faiss  siglip.faiss  eva_clip.faiss           │
         │            └──────┬──────┘                 │
-        │ (rollback     SRRF (siglip+beit3)           │
+        │ (rollback     SRRF (siglip+eva_clip)        │
         │  nếu thiếu)        │                        │
         └──────────┬─────────┘                        │
               score_visual (1 điểm/keyframe, §3.2 tầng 1)
@@ -477,20 +477,20 @@ xuống lớp tiếp theo.
 ### 3.2 Retrieval & Fusion
 
 Fusion chạy **2 tầng riêng biệt** — không được gộp chung thành 1 hàm/1 công thức. Lý do:
-visual có **3 index độc lập** (`clip.faiss`, `siglip.faiss`, `beit3.faiss`), trong khi OCR và
-ASR mỗi kênh chỉ có 1 nguồn điểm. Nếu code gộp cả 5 nguồn điểm (clip, siglip, beit3, ocr, asr)
+visual có **3 index độc lập** (`clip.faiss`, `siglip.faiss`, `eva_clip.faiss`), trong khi OCR và
+ASR mỗi kênh chỉ có 1 nguồn điểm. Nếu code gộp cả 5 nguồn điểm (clip, siglip, eva_clip, ocr, asr)
 vào chung 1 Min-Max, `modality_weights["visual"]` sẽ bị pha loãng sai vì visual chiếm 3/5 vote
 thay vì đúng 1 vote như OCR/ASR.
 
 **Tầng 1 — Intra-visual fusion (gộp 3 embedding thành 1 điểm `score_visual`):**
 
 - Search song song cả 3 FAISS index cho mỗi query.
-- Gộp điểm SigLIP + BEiT-3 bằng **Score-Reflected Reciprocal Rank Fusion (SRRF)** — giữ được
+- Gộp điểm SigLIP + EVA-CLIP bằng **Score-Reflected Reciprocal Rank Fusion (SRRF)** — giữ được
   phân phối điểm tương đồng thực tế, không chỉ dựa vào rank thuần như RRF gốc.
 - **CLIP không tham gia SRRF.** CLIP giữ vai trò rollback: chỉ dùng làm `score_visual` chính
-  cho keyframe nào mà `siglip.faiss` hoặc `beit3.faiss` **chưa Ready** (theo Publishing
+  cho keyframe nào mà `siglip.faiss` hoặc `eva_clip.faiss` **chưa Ready** (theo Publishing
   Criteria §2.3). Khi cả 3 index đã Ready cho video đó, `score_visual`
-  = kết quả SRRF(SigLIP, BEiT-3); điểm CLIP chỉ log lại để so sánh/tie-break, không cộng thêm
+  = kết quả SRRF(SigLIP, EVA-CLIP); điểm CLIP chỉ log lại để so sánh/tie-break, không cộng thêm
   vào công thức.
 - Output tầng 1: đúng **1** con số `score_visual`/keyframe — đây là input duy nhất của tầng 2.
 
@@ -573,7 +573,7 @@ ngay khi model sẵn sàng, không phải sửa lại signature giữa chừng t
 | Query planning (fallback) | Qwen3-VL-2B-Instruct | Local GPU, 4-bit | ~1.8 GB | Load/release theo pha |
 | Shot detection (offline) | TransNetV2 (`transnetv2-pytorch==1.0.5`) | Windows NVIDIA GPU; CPU reference/fallback; Colab T4 phụ | Ghi theo batch report | CUDA chọn tường minh, không fallback; phải qua parity gate CPU–CUDA |
 | Frame recall baseline | CLIP ViT-B/32 | Local/Kaggle | ~300 MB | Rollback an toàn |
-| Frame recall nâng cao | SigLIP + BEiT-3 | Kaggle GPU (offline) | N/A (chạy batch, không online) | Build index nền |
+| Frame recall nâng cao | SigLIP + EVA-CLIP | Kaggle GPU (offline) | N/A (chạy batch, không online) | Build index nền |
 | OCR (primary) | Gemini 2.5 Flash-Lite | Cloud API | 0 MB | |
 | OCR (fallback) | EasyOCR (CRAFT + latin_g2) | Local CPU | thấp | Đã xác nhận hỗ trợ tiếng Việt |
 | Reranking | Neighbors-Based (thuật toán, không phải model) | Local CPU | 0 MB | |
@@ -624,12 +624,12 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
 3. Dựng environment GPU, doctor PASS, parity TransNetV2 CPU–GPU 5/5 rồi chạy full shot batch
    với checkpoint/resume.
 4. Trích keyframe Begin/Middle/End, benchmark blur/pHash trên dev subset rồi mới chốt threshold.
-5. Chạy song song: CLIP/SigLIP/BEiT-3 + OCR ở Nhánh 1, Whisper/phoWhisper ở Nhánh 3.
+5. Chạy song song: CLIP/SigLIP/EVA-CLIP + OCR ở Nhánh 1, Whisper/phoWhisper ở Nhánh 3.
 6. Build `frames.csv`, ba FAISS `IndexIDMap`, `ocr.sqlite`, `asr.sqlite`; chỉ publish
    video qua đủ Publishing Criteria.
 7. Hoàn thiện Online: QueryPlanner fallback → SRRF visual → fusion visual/OCR/ASR →
    reranking → TRAKE/QA → dedup/submission.
-8. A/B CLIP-only với SigLIP+BEiT-3 và các threshold trên dev set có ground truth.
+8. A/B CLIP-only với SigLIP+EVA-CLIP và các threshold trên dev set có ground truth.
 9. Chỉ khi critical path đã ổn định mới làm BLIP-2 Cloud/RunPod như stretch goal.
 
 ---
@@ -646,7 +646,8 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
   `OcrResult` với `bbox`, `detected_text` và `confidence`.
 - **23/08/2026 (bản 4)** — Sau khi đối chiếu với 2 baseline tham khảo (FiftyOne BTC/
   `lducc-hcm-aic`, và 1 doc SOTA offline+online khác): (1) Thêm nguyên tắc bắt buộc §0.8 +
-  tầng 1 "intra-visual fusion" vào §3.2 — gộp SigLIP+BEiT-3 bằng SRRF thành 1 `score_visual`
+  tầng 1 "intra-visual fusion" vào §3.2 — ở kiến trúc bản 4 khi đó, gộp SigLIP+BEiT-3
+  bằng SRRF thành 1 `score_visual`
   duy nhất trước khi vào Min-Max liên-modal (CLIP giữ vai trò rollback khi thiếu index, không
   tham gia SRRF); trước bản này §3.2 coi "visual" là 1 điểm dù thực tế có 3 FAISS index riêng
   — rủi ro làm sai `modality_weights["visual"]` nếu nhiều người code song song không thống
@@ -678,3 +679,12 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
   `2.10.0+cu128`, CUDA 12.8, Tesla T4 và immutable revision của CLIP/SigLIP. Manifest Visual
   phải ghi Python/system/machine cùng Torch/Transformers/CUDA/GPU; checkpoint dở dang chỉ
   được resume trong cùng runtime, không trộn shard giữa Python/Torch khác nhau.
+- **26/08/2026 (bản 10)** — Theo quyết định vận hành cuối của người dùng, loại vĩnh viễn
+  BEiT-3/Microsoft UniLM khỏi kiến trúc; không mở lại audit/checksum/conversion/adapter.
+  Modality thứ ba chính thức đổi sang EVA-CLIP với khóa `eva_clip`, artifact
+  `eva_clip.faiss`, và tầng intra-visual SRRF đổi thành SigLIP + EVA-CLIP; CLIP vẫn là
+  rollback. Publishing Ready yêu cầu tập `keyframe_uid` khớp 100% trong cả
+  `clip.faiss`, `siglip.faiss`, `eva_clip.faiss`. EVA-CLIP phải pin immutable HF revision,
+  chỉ load checkpoint `.safetensors` đã xác thực, và qua dev-subset-5
+  interrupt → process mới resume → validate trên Kaggle CUDA trước khi được viết/chạy
+  production 9 batch.

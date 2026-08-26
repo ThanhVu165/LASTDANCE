@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Iterable, Mapping
 
 
-REQUIRED_VISUAL_INDEXES = ("clip", "siglip", "beit3")
+REQUIRED_VISUAL_INDEXES = ("clip", "siglip", "eva_clip")
 
 
 @dataclass(frozen=True, slots=True)

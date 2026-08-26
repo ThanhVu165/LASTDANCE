@@ -35,9 +35,10 @@ wire vào dispatch logic mới.
 - Visual embedding builder chạy độc lập từng modality, khóa model revision + catalog/UID +
   batch size trong signature, ghi shard atomic với UID `int64`, vector L2-normalized
   `float16` và chỉ publish final manifest sau khi scan/hash/health check đủ shard.
-- CLIP/SigLIP có adapter Kaggle CUDA và revision Hugging Face bất biến đã verify; BEiT-3
-  fail-closed chờ official Microsoft UniLM retrieval checkpoint, không thay bằng BEiT
-  thường. Intentional stop/resume phải được chứng minh bằng hai process thật.
+- CLIP/SigLIP có adapter Kaggle CUDA, immutable Hugging Face revision và dev-subset-5 đã
+  PASS intentional stop → process mới resume → validate trên Tesla T4. EVA-CLIP là modality
+  thứ ba mới: official HF revision + safetensors đã pin, adapter fail-closed không load
+  pickle; chưa được production cho tới khi qua cùng dev gate. BEiT-3 đã bị loại vĩnh viễn.
 - FAISS builder chạy CPU local bằng `IndexIDMap(IndexFlatIP)`, add batch video rời nhau theo
   `keyframe_uid`, không chờ modality khác. Sidecar SHA-bound và validator diff ID/vector thật
   với `frames.csv`; source overlap hoặc khác model/catalog/dimension bị từ chối.
@@ -64,7 +65,7 @@ wire vào dispatch logic mới.
 - Checkpoint theo `video_id` + stage + signature, không cho resume chéo signature hoặc lùi
   progress.
 - Publishing readiness được suy ra fail-closed từ tập `keyframe_uid` của cả CLIP/SigLIP/
-  BEiT-3, vector health, mapping sanity và checkpoint/resume verification. Không có API set
+  EVA-CLIP, vector health, mapping sanity và checkpoint/resume verification. Không có API set
   `complete=true` thủ công.
 
 ## Kiểm thử
@@ -168,7 +169,7 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 - Dev catalog riêng tại `index/dev-subset-5/frames.csv`: 4.164 record/5 video, SHA sidecar
   validator pass; UID, `(video_id, local_idx)` và `(video_id, frame_id)` đều unique 100%.
 - Đây chỉ là dev catalog complete trong namespace riêng, không phải production index: chưa
-  có CLIP/SigLIP/BEiT-3 FAISS, OCR hoặc ASR nên collection production vẫn fail closed.
+  có đủ CLIP/SigLIP/EVA-CLIP FAISS, OCR hoặc ASR nên collection production vẫn fail closed.
 
 ## Chưa triển khai hoặc chưa chạy thật
 
@@ -177,8 +178,9 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
   mỗi shard có checkpoint/report/extraction state riêng.
 - Ngưỡng blur/pHash production chưa chốt vì visual audit chưa thay thế ground-truth A/B.
   Cosine dedup chờ embedding và không nằm trên critical path hiện tại.
-- Chưa sinh CLIP/SigLIP/BEiT-3 embedding hoặc FAISS `IndexIDMap` bằng model/dữ liệu thật.
-  Code builder/validator/runbook đã có và synthetic regression PASS; BEiT-3 còn blocked.
+- Dev-subset CLIP/SigLIP embedding thật đã PASS và archive handoff đã verify. Production
+  CLIP đang chạy theo 9 batch; production SigLIP chuẩn bị chạy độc lập. EVA-CLIP chưa qua
+  dev-subset CUDA gate; chưa có đủ ba FAISS `IndexIDMap` production ở máy local.
 - Chưa có `ocr.sqlite` hoặc `asr.sqlite`.
 - Chưa dùng Kaggle/Colab hoặc push Hugging Face Dataset. Windows CUDA local đã dùng cho shot
   batch; `.venv-shot-gpu` chỉ là environment shot detection, không thay thế environment
@@ -190,8 +192,8 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 1. Chờ hai shard keyframe hoàn tất và xác minh đủ 873 plan/quality cùng JPEG không rỗng.
 2. Chạy `scripts.build_frames_catalog --collection`; lệnh chỉ publish khi inventory,
    plan và quality khớp chính xác toàn collection.
-3. Khi catalog production PASS, chạy CLIP/SigLIP Kaggle theo gate exit 75 → process mới
-   resume → validator; BEiT-3 chỉ chạy sau khi chốt checkpoint chính thức.
+3. Tiếp tục production CLIP/SigLIP độc lập; chạy EVA-CLIP dev-subset theo gate exit 75 →
+   process mới resume → validator. Chỉ sau EVA dev PASS mới tạo production 9-batch của nó.
 4. Tải modality hoàn tất về local và build FAISS modality đó ngay, không đợi hai modality
    còn lại; validator diff `keyframe_uid` theo video.
 5. Chốt ngưỡng blur/pHash bằng ground-truth A/B; không filter mù artifact report-only.
@@ -200,6 +202,22 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 > Cập nhật CUỐI mỗi phiên Codex, trước khi đóng session — dù account nào cũng đọc file này
 > đầu tiên sau `AGENTS.md`. Không xóa lịch sử cũ, chỉ thêm mục mới lên đầu.
+
+---
+
+### [26/08/2026] Thay BEiT-3 bằng EVA-CLIP
+
+- Quyết định cuối: BEiT-3/Microsoft UniLM bị loại vĩnh viễn; không mở lại audit, checksum,
+  sandbox conversion hoặc adapter. Registry giữ row `blocked_model_selection` chỉ để ghi
+  nhận trạng thái cuối.
+- Modality thứ ba chính thức là `eva_clip`; index bàn giao là `eva_clip.faiss`; Publishing
+  Ready yêu cầu CLIP + SigLIP + EVA-CLIP khớp 100% `keyframe_uid`.
+- Pin `timm/eva02_large_patch14_clip_224.merged2b_s4b_b131k` tại immutable revision
+  `bf4190eb65dd5204ffb03e980108beb1200e0873`; chỉ cho phép
+  `open_clip_model.safetensors` với SHA-256 đã pin. Code/dev runner được chuẩn bị nhưng gate
+  Kaggle T4 dev-subset-5 vẫn phải chạy thật trước production.
+- `scripts.run_eva_clip_dev_gate` tự chạy verifier → intentional exit 75 → process mới
+  resume → validator và assert dimension/dtype/CUDA; cố ý không có archive/upload/9-batch.
 
 ---
 
@@ -301,8 +319,8 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 1. Hoàn tất và validate hai shard keyframe 437 + 436 video.
 2. Build `frames.csv --collection` và xác minh inventory/plan/quality membership 873/873.
-3. Chạy CLIP/SigLIP trên Kaggle bằng artifact float16 + real checkpoint/resume gate.
-4. Chốt official BEiT-3 retrieval checkpoint + checksum rồi mới bật modality.
+3. Tiếp tục CLIP/SigLIP production trên Kaggle bằng artifact float16 và checkpoint/resume.
+4. Chạy EVA-CLIP dev-subset CUDA gate; không tạo production runner trước khi PASS.
 5. Build FAISS độc lập cho modality đã xong và diff UID thật với catalog.
 6. Chạy ground-truth A/B trước khi bật blur/pHash filter hoặc đổi detector.
 

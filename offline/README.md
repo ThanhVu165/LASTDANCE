@@ -158,8 +158,8 @@ luôn giữ ít nhất một keyframe/shot. `build_frames_catalog` chỉ nhận 
 khớp SHA và không được dùng catalog smoke/partial làm production index.
 
 Inventory/keyframe/dedup là local-CPU. Shot detection dùng CPU làm reference và có worker
-Windows/Colab CUDA fail-closed sau parity gate 5 video. Các bước CLIP/SigLIP/BEiT-3 chưa
-được chạy hoặc tải model trong lát cắt này.
+Windows/Colab CUDA fail-closed sau parity gate 5 video. Visual embedding chạy trên Kaggle:
+CLIP/SigLIP đã qua dev gate, còn EVA-CLIP đang chờ gate T4 riêng trước production.
 
 ## Handoff shot detection giữa nhiều máy
 
@@ -172,11 +172,11 @@ production batch.
 
 ## Handoff visual embedding Kaggle
 
-Đọc `docs/VISUAL_EMBEDDING_RUNBOOK.md` trước khi upload input/chạy GPU. CLIP và SigLIP có
-candidate dev đã pin immutable revision; mỗi modality publish/resume độc lập. BEiT-3 đang
-fail-closed chờ chốt official Microsoft UniLM retrieval checkpoint, không được thay bằng
-BEiT thường. Chưa modality nào được coi là checkpoint/resume verified cho tới khi chạy quy
-trình exit 75 → process mới resume → validator PASS trên Kaggle thật.
+Đọc `docs/VISUAL_EMBEDDING_RUNBOOK.md` trước khi upload input/chạy GPU. CLIP và SigLIP đã
+pin immutable revision và qua dev gate Kaggle T4; mỗi modality publish/resume độc lập.
+EVA-CLIP đã pin official HF safetensors nhưng vẫn fail-closed với production cho tới khi qua
+đúng quy trình exit 75 → process mới resume → validator PASS trên Kaggle thật. BEiT-3 đã bị
+loại vĩnh viễn, không mở lại audit/checkpoint/adapter.
 
 ## Build FAISS local
 
