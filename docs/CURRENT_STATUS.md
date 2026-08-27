@@ -1,6 +1,21 @@
 # Trạng thái hiện tại của LASTDANCE
 
-Cập nhật: 26/08/2026.
+Cập nhật: 27/08/2026.
+
+## Visual Embedding — CLOSED/PASS ngày 27/08/2026
+
+- CLIP, SigLIP và EVA-CLIP production đều PASS đủ 9/9 batch, 873 video và 293.336
+  `keyframe_uid` tại snapshot HF cuối
+  `938aefd437ab8db61fc6599d613aedcf4921d71e`.
+- Local đã khôi phục đúng 293.336 JPEG từ catalog production, không có file rỗng; ba
+  `IndexIDMap(IndexFlatIP)` đã build và validator độc lập PASS: CLIP dim 512, SigLIP dim
+  768, EVA-CLIP dim 768. Cả ba dùng cùng UID-set SHA-256
+  `5bada00bd4a93928e48af3a6cbe7189a3b465eafb00cc8f829941edee536e660`, khớp catalog
+  SHA-256 `ee9693e75580527a0a257e9ba003984e105b059b716922c03c7a0b72b1508a37`.
+- Finite/L2 norm, source `float16`, FAISS `float32`, 9 source batch và
+  `checkpoint_resume_verified=true` đều PASS. Sanity mapping đầu/giữa/cuối catalog đã đối
+  chiếu ảnh, FPS, `frame_id` và `pts_time`. Các mô tả Visual “chưa chạy/chưa build” ở log
+  lịch sử phía dưới đã được mục closure này thay thế.
 
 ## Quyết định kiến trúc
 

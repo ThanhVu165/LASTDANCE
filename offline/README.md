@@ -159,7 +159,8 @@ khớp SHA và không được dùng catalog smoke/partial làm production index
 
 Inventory/keyframe/dedup là local-CPU. Shot detection dùng CPU làm reference và có worker
 Windows/Colab CUDA fail-closed sau parity gate 5 video. Visual embedding chạy trên Kaggle:
-CLIP/SigLIP đã qua dev gate, còn EVA-CLIP đang chờ gate T4 riêng trước production.
+CLIP/SigLIP/EVA-CLIP đều đã qua dev gate T4 và production 9/9 batch; ba modality
+publish/resume độc lập theo `keyframe_uid`.
 
 ## Handoff shot detection giữa nhiều máy
 
@@ -174,9 +175,11 @@ production batch.
 
 Đọc `docs/VISUAL_EMBEDDING_RUNBOOK.md` trước khi upload input/chạy GPU. CLIP và SigLIP đã
 pin immutable revision và qua dev gate Kaggle T4; mỗi modality publish/resume độc lập.
-EVA-CLIP đã pin official HF safetensors nhưng vẫn fail-closed với production cho tới khi qua
-đúng quy trình exit 75 → process mới resume → validator PASS trên Kaggle thật. BEiT-3 đã bị
-loại vĩnh viễn, không mở lại audit/checkpoint/adapter.
+EVA-CLIP đã PASS đúng quy trình exit 75 → process mới resume → validator trên Kaggle T4;
+bằng chứng SHA-256 và notebook production 9 batch nằm trong Visual runbook. Production EVA
+đã hoàn tất bằng `notebooks/kaggle_eva_clip_production.ipynb`, batch size 32 và namespace HF
+riêng; snapshot handoff cuối là commit `938aefd437ab8db61fc6599d613aedcf4921d71e`.
+BEiT-3 đã bị loại vĩnh viễn, không mở lại audit/checkpoint/adapter.
 
 ## Build FAISS local
 
@@ -185,5 +188,10 @@ Sau khi một embedding modality đã hoàn tất và được tải về, đọ
 `IndexIDMap(IndexFlatIP)`, hỗ trợ add batch video rời nhau và publish sidecar SHA-bound sau
 cùng. `complete=true` của một sidecar chỉ thuộc modality/video đã khai báo, chưa phải trạng
 thái Ready của toàn pipeline.
+
+Closure Visual ngày 27/08/2026: local đã build và validate PASS `clip.faiss` (dim 512),
+`siglip.faiss` (dim 768) và `eva_clip.faiss` (dim 768), mỗi index có đúng 293.336 UID/873
+video, 9 source batch, finite/L2 norm và checkpoint/resume verified. Các artifact này nằm
+dưới `AIC_DATA/index` và không được commit vào Git.
 
 Xem `docs/ENVIRONMENT_SETUP.md` để dựng environment giống nhau trên Windows/Kaggle.
