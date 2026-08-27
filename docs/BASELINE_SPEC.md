@@ -274,6 +274,40 @@ class OcrResult(BaseModel):
     language: str  # "vi" | "en" | "mixed"
 ```
 
+`OcrResult` giữ nguyên là schema nội dung chuẩn. Artifact trung gian bọc schema này bằng
+**OCR record envelope schema v1** để checkpoint/resume và provenance không làm đổi schema
+FTS cuối:
+
+- Mỗi keyframe của batch có đúng một dòng JSONL với `video_id`, `keyframe_uid`, `frame_id`,
+  relative `source_image`, `execution_mode`, `status`, `engine`, `fallback_used`, `attempts`
+  và `result`. `execution_mode=gemini_primary` cho pipeline chính; một job EasyOCR chủ động,
+  tách biệt phải ghi `easyocr_offline` và `fallback_used=false`, tránh đánh đồng với failover
+  âm thầm do quota.
+- `status` là `success | no_text | error`. `success` bắt buộc có `result: OcrResult` và ít
+  nhất một text không rỗng; `no_text`/`error` dùng `result=null`, không tạo `language` hay
+  confidence giả. Provenance/error chỉ nằm trong envelope/manifest, không thêm cột vào
+  `ocr_fts`.
+- `bbox` trong envelope chuẩn hóa thành quadrilateral 8 số
+  `[x1,y1,x2,y2,x3,y3,x4,y4]`, theo chiều kim đồng hồ từ góc trên-trái trực quan, tọa độ
+  `[0,1]` trên ảnh keyframe sau khi đã xoay đúng orientation. EasyOCR quy đổi 4 point sang
+  dạng này; Gemini phải trả cùng convention.
+- `confidence` Gemini giữ giá trị top-level đã validate từ JSON schema. Adapter EasyOCR
+  tính trung bình confidence từng vùng, trọng số bằng số code point không-whitespace của
+  text vùng đó; kết quả clamp vào `[0,1]`.
+- Coverage terminal yêu cầu toàn bộ UID thuộc đúng một trong ba status. Completion gate chỉ
+  PASS khi tập UID exact, không duplicate/foreign/missing và `error == 0`; `no_text` là kết
+  quả hợp lệ, không bị diễn giải thành lỗi hoặc ép tạo row FTS.
+- Chín batch ghi chín JSONL shard độc lập. Chỉ sau khi union 9 tập UID disjoint và exhaustive
+  so với `frames.csv` mới build **một** `ocr.sqlite` cuối ở local; chỉ record `success` được
+  nạp vào `ocr_fts`.
+
+Fallback policy fail-closed: `429`/`5xx`/timeout retry exponential backoff + jitter;
+`401`/`403` hoặc quota/global project failure dừng batch, không âm thầm đẩy toàn catalog sang
+CPU. Chỉ response Gemini sai JSON/schema sau retry mới fallback EasyOCR theo từng keyframe.
+Nếu EasyOCR cũng lỗi, envelope ghi `error` và batch không được complete. EasyOCR production
+phải khởi tạo với `download_enabled=False` sau khi package/CRAFT/`latin_g2` đã kiểm tra
+filename, size và SHA-256 theo registry pin.
+
 ### 2.3 Publishing Criteria — điều kiện `complete=true`
 
 `complete` được tính theo từng `video_id`, không phải toàn catalog. Một video chỉ được đánh
@@ -688,3 +722,9 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
   chỉ load checkpoint `.safetensors` đã xác thực, và qua dev-subset-5
   interrupt → process mới resume → validate trên Kaggle CUDA trước khi được viết/chạy
   production 9 batch.
+- **26/08/2026 (bản 11)** — Chốt OCR artifact envelope schema v1 quanh `OcrResult` mà không
+  đổi schema dùng chung/FTS: terminal status `success/no_text/error`, provenance attempt,
+  bbox quadrilateral normalized, completion gate exact UID với `error=0`; siết fallback để
+  auth/quota global dừng batch và chỉ response sai schema mới rơi EasyOCR từng frame. Chín
+  batch hợp nhất qua JSONL shard trước khi build một `ocr.sqlite` cuối ở local; EasyOCR phải
+  dùng weight pin checksum và `download_enabled=False`.

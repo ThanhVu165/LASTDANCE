@@ -220,6 +220,36 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 ---
 
+### [27/08/2026] OCR Gate 1 — catalog/model/quota/strict-schema canary
+
+- Catalog private HF đã audit tại immutable revision
+  `72848939bdc5ebd57b5cd45370e685aee036cafa`: `frames.csv` SHA-256
+  `ee9693e75580527a0a257e9ba003984e105b059b716922c03c7a0b72b1508a37`, đúng 293.336
+  keyframe/873 video; UID formula mismatch 0, duplicate 0, chín batch disjoint/exhaustive.
+- `gemini-2.5-flash-lite` trả HTTP 404 và API nói không còn cấp cho user mới. Model pin đã
+  verify cho audit là `gemini-3.5-flash-lite`, catalog version `3.5-flash-lite-07-2026`;
+  không dùng alias `latest`. Canary loose-schema 390 request trước đó thực tế cũng dùng
+  model 3.5; model 2.5 chỉ có đúng preflight 404, không được trộn vào baseline.
+- Google AI Studio Rate Limit của đúng project `gen-lang-client-0009440353`, Free tier,
+  hiển thị trần thật: **15 RPM, 250.000 TPM, 500 RPD**. Snapshot sau audit là
+  `17/15 RPM`, `25,28K/250K TPM`, `502/500 RPD`; console báo đã chạm rate limit.
+- Đã đổi canary sang Gemini `responseJsonSchema`: mỗi bbox bắt buộc `minItems=maxItems=8`,
+  từng tọa độ và confidence trong `[0,1]`, `additionalProperties=false`. Strict preflight
+  HTTP 200/schema-valid. Baseline ghép hai JSONL shard đủ 100 unique request: 97 terminal
+  success, 3 terminal timeout/quota, 117 HTTP attempt; **97/97 HTTP 200 schema-valid, 0
+  invalid bbox**, normalized text và language đúng 97/97. Latency success P50 2.190 ms,
+  P95 2.647 ms; có 13 timeout-attempt và 7 attempt HTTP 429 được giữ provenance.
+- Rate harness cũ có lỗi catch-up burst sau timeout; đã sửa để mọi HTTP attempt, kể cả
+  retry, được pace từ thời điểm attempt thật và không đuổi lịch. Peak 17 vượt RPM=15 đã trả
+  `429 RESOURCE_EXHAUSTED`; ramp tiếp theo dừng vì RPD đã 502/500, không đốt thêm quota.
+- Capacity lower bound cho 293.336 keyframe: chỉ xét 15 RPM là khoảng 13,58 ngày; áp trần
+  500 RPD là khoảng 586,67 ngày. Trong 6 ngày free tier tối đa 3.000 request (~1,023%
+  catalog), nên Gate 1 **chưa PASS** và không sang Gate 2 với project Free tier hiện tại.
+- Evidence local sanitize nằm dưới `tmp/ocr-gate1/` và bị `.gitignore`; chưa tạo
+  `ocr.sqlite` production. OCR targeted unit test 9/9 PASS bằng Python 3.11 local.
+
+---
+
 ### [26/08/2026] Thay BEiT-3 bằng EVA-CLIP
 
 - Quyết định cuối: BEiT-3/Microsoft UniLM bị loại vĩnh viễn; không mở lại audit, checksum,

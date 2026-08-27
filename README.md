@@ -21,6 +21,8 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
    chạy CLIP/SigLIP độc lập trên Kaggle và test checkpoint/resume thật.
 9. [`docs/FAISS_INDEX_RUNBOOK.md`](docs/FAISS_INDEX_RUNBOOK.md) - build/add/validate từng
    `IndexIDMap` độc lập trên CPU local sau khi embedding batch hoàn tất.
+10. [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md) - Gate 1 catalog/quota, EasyOCR offline
+    checksum preflight, JSONL envelope/resume và merge SQLite cuối.
 
 Các tài liệu window-first cũ được giữ lại làm lịch sử, không còn là runtime instruction.
 
