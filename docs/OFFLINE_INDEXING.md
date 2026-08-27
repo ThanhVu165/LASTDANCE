@@ -24,7 +24,7 @@ chỉ vì benchmark nhà phát hành cao hơn.
 | Structured window caption | lexical retrieval, debug, planner grounding | JSON + text index | Cần triển khai |
 | OCR | biển hiệu, phụ đề, tên riêng, số | line text + confidence + box | Builder có, chưa full |
 | Object evidence | object, count thô | labels/counts/scores | Đã có cache |
-| ASR | lời nói, tên riêng, nội dung không nhìn thấy | segment text + timestamp | Hoãn sau KIS/QA |
+| ASR | lời nói, tên riêng, nội dung không nhìn thấy | segment text + timestamp | Nhánh 3 chạy song song; xem `BASELINE_SPEC.md` §2A |
 | Exact-frame access | refine đáp án nộp | decode từ MP4 theo `frame_id` | Đã có |
 
 Không nguồn nào tự nó là ground truth. Query-time planner quyết định evidence nào
@@ -145,11 +145,13 @@ Chuẩn hóa organizer detection thành label, count và score theo keyframe/win
 Object chỉ là tín hiệu phụ vì detector có thể bỏ sót thuộc tính, hành động hoặc
 nhận nhầm object.
 
-### Stage 7 — ASR sau này
+### Stage 7 — ASR song song (Nhánh 3)
 
-ASR phải sinh segment có `start_time`, `end_time`, language và confidence. Text
-được index lexical + dense và join vào window theo timestamp. Chỉ build sau khi
-video-window/KIS/QA ổn định vì ASR không giải quyết lỗi visual recall.
+ASR sinh segment có `start_time`, `end_time`, `language`, `transcribed_text` và
+`keyframe_uid_nearest`. Pipeline này chạy song song bằng tài khoản Kaggle/Colab riêng,
+align về `frames.csv` theo timestamp rồi build `asr.sqlite` FTS5. Contract hiện hành và
+Publishing Criteria nằm tại `BASELINE_SPEC.md` §2A; không dùng thiết kế window-first cũ
+làm runtime instruction.
 
 ## 4. Artifact layout mục tiêu
 
@@ -168,8 +170,9 @@ data/index/
   window_captions_lexical/
   ocr_cache.json
   ocr_state.json
-  asr_segments.jsonl          # giai đoạn sau
-  asr_lexical/                # giai đoạn sau
+  asr_segments.jsonl          # checkpoint/provenance trung gian Nhánh 3
+  asr.sqlite                  # SQLite FTS5 bàn giao cho Online
+  asr_coverage.csv            # trạng thái từng video
 ```
 
 Mỗi builder cần `--limit`, `--checkpoint-every`, resume theo signature và atomic
@@ -187,7 +190,7 @@ validate dataset
   → optional structured captions
   → OCR
   → optional SigLIP2
-  → ASR sau này
+  → ASR chạy song song trên GPU account riêng; alignment/FTS hoàn tất khi frames.csv sẵn sàng
 ```
 
 Các job GPU chạy tuần tự. Có thể sửa code trong lúc builder chạy nếu không restart

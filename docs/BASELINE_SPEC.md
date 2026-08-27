@@ -338,6 +338,34 @@ Với mỗi segment, chọn keyframe có `pts_time` nằm trong `[start_time, en
 segment nhất; nếu không có keyframe trong khoảng, chọn keyframe gần `start_time` nhất trong
 cùng video. Không tự tạo khóa ASR mới để thay `keyframe_uid`.
 
+Để tie-break deterministic, nếu có nhiều keyframe trong khoảng thì đo khoảng cách tới
+midpoint `(start_time + end_time) / 2`, sau đó ưu tiên `pts_time` nhỏ hơn và
+`keyframe_uid` nhỏ hơn. Nếu không có frame trong khoảng, áp cùng tie-break sau khoảng cách
+tới `start_time`.
+
+Audio trung gian chuẩn là WAV `pcm_s16le`, 16 kHz, mono, tách atomic tại local. Manifest
+từng video phải ghi source/WAV relative path, extraction signature, SHA-256, duration, size,
+sample rate, channel, codec, MB/phút và tỷ lệ size WAV/source. Đây là PCM downsample, không
+được mô tả sai là codec nén. WAV có manifest hợp lệ là authority khi resume; artifact mồ côi
+hoặc sai hash/codec phải fail closed.
+
+Dev Gate cố định 5 video dùng PyTorch/Transformers trên Tesla T4, chạy từng model ở process
+riêng: `openai/whisper-large-v3` và `vinai/PhoWhisper-large`, đều pin immutable revision.
+Mỗi model phải intentional-stop sau một ranh giới video, process mới scan/validate record đã
+publish rồi resume không duplicate. Manifest ghi model/weight hash, Torch/Transformers/CUDA,
+GPU, runtime, real-time factor và `peak_cuda_memory_bytes`. WER chỉ tính khi đã có ground
+truth sẵn; nghe đối chiếu thủ công vẫn bắt buộc.
+
+Whisper Large-v3 chỉ load safetensors đã pin checksum. PhoWhisper upstream hiện chỉ có
+PyTorch `.bin`, nên ở Dev Gate phải dùng Torch >= 2.6, `weights_only=True`, không remote
+code và ghi SHA-256 thật. Cả hai giữ `production_allowed=false` cho tới khi Dev Gate PASS
+và người dùng chốt đúng một model; không tự suy diễn Dev Gate complete thành production.
+
+Transcript checkpoint trung gian publish atomic một record/video với terminal status
+`success | no_speech`, model/revision/weight provenance, source WAV hash, elapsed time và
+danh sách segment timestamped. `no_speech` không đồng nghĩa ASR complete: coverage phải giữ
+`no_speech_unverified` cho tới khi con người nghe xác minh.
+
 ### 2A.3 Schema `AsrSegment`
 
 ```python
@@ -384,6 +412,8 @@ Một video chỉ được đánh dấu ASR complete khi:
 - [ ] Mọi `keyframe_uid_nearest` tồn tại trong `frames.csv` của cùng video.
 - [ ] `asr.sqlite` build FTS5 thành công và query mẫu trả đúng kết quả.
 - [ ] Coverage report không đánh dấu hoàn tất cho checkpoint dở dang.
+- [ ] Model production đã qua Dev Gate 5 video với process mới resume thật, peak VRAM và
+      provenance đầy đủ; model chưa được người dùng chốt vẫn fail closed.
 
 Online chỉ tăng trọng số ASR khi `UnifiedQueryPlan.spoken_text` không rỗng. Video thiếu
 ASR coverage phải hiện rõ để thí sinh dùng human-in-the-loop, không im lặng diễn giải kết
@@ -688,3 +718,9 @@ phải viết lại toàn bộ khi câu trả lời ngược với giả định
   chỉ load checkpoint `.safetensors` đã xác thực, và qua dev-subset-5
   interrupt → process mới resume → validate trên Kaggle CUDA trước khi được viết/chạy
   production 9 batch.
+- **27/08/2026 (bản 12)** — Hiện thực hóa contract vận hành ASR Nhánh 3: WAV PCM s16le
+  16 kHz mono có manifest/hash/size report; Dev Gate 5 video dùng PyTorch/Transformers trên
+  Tesla T4 với intentional stop → process mới resume và peak CUDA; Whisper Large-v3 dùng
+  safetensors pin checksum, PhoWhisper `.bin` chỉ được audit Dev Gate bằng Torch >= 2.6 +
+  `weights_only=True` và chưa được production. Khóa transcript record/video, alignment
+  midpoint deterministic, `no_speech_unverified`, SQLite FTS5 và coverage fail closed.

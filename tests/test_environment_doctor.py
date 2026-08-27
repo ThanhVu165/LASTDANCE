@@ -91,6 +91,23 @@ class EnvironmentDoctorTests(unittest.TestCase):
         cuda = next(check for check in checks if check.name == "cuda")
         self.assertTrue(cuda.ok)
 
+    def test_asr_kaggle_profile_requires_python_312_and_cuda(self):
+        with patch("scripts.environment_doctor.check_python") as python_check, patch(
+            "scripts.environment_doctor.check_package"
+        ) as package_check, patch(
+            "torch.cuda.is_available", return_value=True
+        ), patch(
+            "torch.cuda.get_device_name", return_value="Tesla T4"
+        ):
+            python_check.return_value.ok = True
+            package_check.return_value.ok = True
+            checks = collect_checks("asr-kaggle-gpu", {}, check_data=False)
+
+        python_check.assert_called_once_with(required_minor=(3, 12))
+        cuda = next(check for check in checks if check.name == "cuda")
+        self.assertTrue(cuda.ok)
+        self.assertEqual(cuda.detail, "Tesla T4")
+
     def test_colab_shot_profile_requires_cuda_without_requiring_data(self):
         with patch("scripts.environment_doctor.check_python") as python_check, patch(
             "scripts.environment_doctor.check_package"

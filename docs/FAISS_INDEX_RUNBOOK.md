@@ -1,8 +1,8 @@
 # Runbook build FAISS độc lập theo modality
 
-Tài liệu này là entry point cho bước 3.2 của `OFFLINE_INDEXING_SPEC.md`: embedding shard
-đã hoàn tất → `IndexIDMap(IndexFlatIP)`. Bước này chạy **CPU local**, không dùng quota
-Kaggle và không ảnh hưởng worker Shot Detection.
+Tài liệu này là entry point vận hành cho `BASELINE_SPEC.md` §2.1d: embedding shard đã hoàn
+tất → `IndexIDMap(IndexFlatIP)`. Bước này chạy **CPU local**, không dùng quota Kaggle và
+không ảnh hưởng worker Shot Detection.
 
 Mỗi lệnh chỉ build đúng một trong `clip`, `siglip`, `eva_clip`. Không chờ ba modality hoàn tất
 cùng lúc và không làm SRRF/CLIP rollback; các logic đó thuộc Nhánh 2 online.

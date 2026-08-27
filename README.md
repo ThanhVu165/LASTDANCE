@@ -11,16 +11,16 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
 1. [`AGENTS.md`](AGENTS.md) - phạm vi và các invariant bắt buộc.
 2. [`docs/BASELINE_SPEC.md`](docs/BASELINE_SPEC.md) - baseline hợp nhất, thắng khi tài liệu
    chi tiết còn lệch.
-3. [`docs/OFFLINE_INDEXING_SPEC.md`](docs/OFFLINE_INDEXING_SPEC.md) - chi tiết Nhánh 1.
-4. [`docs/ASR_SPEC.md`](docs/ASR_SPEC.md) - data contract Nhánh 3.
-5. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) - trạng thái triển khai thực tế.
-6. [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) - môi trường Windows/Kaggle.
-7. [`docs/SHOT_DETECTION_RUNBOOK.md`](docs/SHOT_DETECTION_RUNBOOK.md) - chạy và bàn giao
+3. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) - trạng thái triển khai thực tế.
+4. [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) - môi trường Windows/Kaggle.
+5. [`docs/SHOT_DETECTION_RUNBOOK.md`](docs/SHOT_DETECTION_RUNBOOK.md) - chạy và bàn giao
    TransNetV2 giữa nhiều máy.
-8. [`docs/VISUAL_EMBEDDING_RUNBOOK.md`](docs/VISUAL_EMBEDDING_RUNBOOK.md) - chuẩn bị input,
+6. [`docs/VISUAL_EMBEDDING_RUNBOOK.md`](docs/VISUAL_EMBEDDING_RUNBOOK.md) - chuẩn bị input,
    chạy CLIP/SigLIP độc lập trên Kaggle và test checkpoint/resume thật.
-9. [`docs/FAISS_INDEX_RUNBOOK.md`](docs/FAISS_INDEX_RUNBOOK.md) - build/add/validate từng
+7. [`docs/FAISS_INDEX_RUNBOOK.md`](docs/FAISS_INDEX_RUNBOOK.md) - build/add/validate từng
    `IndexIDMap` độc lập trên CPU local sau khi embedding batch hoàn tất.
+8. [`docs/ASR_RUNBOOK.md`](docs/ASR_RUNBOOK.md) - tách WAV local, Dev Gate Whisper/
+   PhoWhisper trên Kaggle T4, alignment và build `asr.sqlite`.
 
 Các tài liệu window-first cũ được giữ lại làm lịch sử, không còn là runtime instruction.
 

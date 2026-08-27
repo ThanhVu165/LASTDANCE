@@ -1,0 +1,8 @@
+# Kaggle supplies its CUDA-matched Torch build; do not replace it from this profile.
+-r base.txt
+
+transformers==5.15.1
+accelerate==1.14.0
+huggingface-hub==1.28.0
+safetensors==0.8.0
+sentencepiece==0.2.1

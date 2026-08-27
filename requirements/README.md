@@ -10,10 +10,14 @@ Local/Shot target runtime is CPython 3.11.9. Kaggle Visual target runtime is CPy
 | `shot-windows-gpu.txt` | TransNetV2 CUDA 12.6, Torch 2.12.1 | Windows NVIDIA GPU |
 | `shot-colab-gpu.txt` | TransNetV2 CUDA shot detection, giữ Torch có sẵn | Google Colab T4 |
 | `kaggle-gpu.txt` | CLIP/SigLIP/EVA-CLIP batch embedding | Kaggle GPU |
+| `asr-kaggle-gpu.txt` | Whisper/PhoWhisper Dev Gate và batch ASR | Kaggle T4, tài khoản Nhánh 3 |
 
 Kaggle visual embedding phải theo `docs/VISUAL_EMBEDDING_RUNBOOK.md`. CLIP/SigLIP/EVA-CLIP
 đều đã qua dev gate và production 9/9 batch; EVA-CLIP dùng `open-clip-torch==3.3.0`,
 `timm==1.0.28` cùng checkpoint `.safetensors` đã pin.
+Kaggle ASR dùng profile riêng và `docs/ASR_RUNBOOK.md`; không cài OpenCLIP/EVA hoặc dùng
+tài khoản GPU của Nhánh 1. Torch do image Kaggle cung cấp và phải từ 2.6 trở lên nếu audit
+checkpoint PhoWhisper `.bin` bằng loader `weights_only=True`.
 Sau khi tải embedding artifact về, FAISS CPU dùng cùng profile `offline-local` và chạy theo
 `docs/FAISS_INDEX_RUNBOOK.md`; không cài FAISS vào environment Kaggle chỉ để build local.
 

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "runner": "transformers_pytorch",
+  "whisper_large_v3": {
+    "model_id": "openai/whisper-large-v3",
+    "revision": "06f233fe06e710322aca913c1bc4249a0d71fce1",
+    "weight_filename": "model.safetensors",
+    "weight_format": "safetensors",
+    "weight_sha256": "a8e94b85976e5864ba3e9525c7e6c83b2a1eca42d4b797a0c7c24d778e40fd95",
+    "forced_language": null,
+    "dev_gate_allowed": true,
+    "production_allowed": false
+  },
+  "phowhisper_large": {
+    "model_id": "vinai/PhoWhisper-large",
+    "revision": "b9136a44b5f2ca664bd0b8f74baecf1715f6eeeb",
+    "weight_filename": "pytorch_model.bin",
+    "weight_format": "pytorch_bin_weights_only",
+    "weight_sha256": null,
+    "forced_language": "vi",
+    "dev_gate_allowed": true,
+    "production_allowed": false
+  }
+}

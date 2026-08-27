@@ -41,6 +41,7 @@ _PROFILE_PYTHON_MINORS = {
     "shot-colab-gpu": (3, 11),
     "shot-windows-gpu": (3, 11),
     "kaggle-gpu": (3, 12),
+    "asr-kaggle-gpu": (3, 12),
 }
 
 _PROFILE_PACKAGES = {
@@ -76,6 +77,15 @@ _PROFILE_PACKAGES = {
         "torchvision": ("torchvision", None),
         "open-clip-torch": ("open_clip", "3.3.0"),
         "timm": ("timm", "1.0.28"),
+    },
+    "asr-kaggle-gpu": {
+        **_BASE_PACKAGES,
+        "torch": ("torch", None),
+        "transformers": ("transformers", "5.15.1"),
+        "accelerate": ("accelerate", "1.14.0"),
+        "huggingface-hub": ("huggingface_hub", "1.28.0"),
+        "safetensors": ("safetensors", "0.8.0"),
+        "sentencepiece": ("sentencepiece", "0.2.1"),
     },
 }
 
@@ -204,7 +214,12 @@ def collect_checks(
         checks.append(check_executable("ffmpeg", values.get("AIC_FFMPEG", "ffmpeg")))
         checks.append(check_executable("ffprobe", values.get("AIC_FFPROBE", "ffprobe")))
         checks.extend(check_transnet_weights(values))
-    if profile in {"kaggle-gpu", "shot-colab-gpu", "shot-windows-gpu"}:
+    if profile in {
+        "kaggle-gpu",
+        "asr-kaggle-gpu",
+        "shot-colab-gpu",
+        "shot-windows-gpu",
+    }:
         try:
             import torch
 
