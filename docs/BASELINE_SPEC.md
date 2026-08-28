@@ -3,8 +3,8 @@
 > Đây là **nguồn chuẩn kỹ thuật duy nhất** cho Offline, ASR và Online. Runbook/status chỉ mô
 > tả cách vận hành hoặc tiến độ, không được định nghĩa schema/contract khác file này. Nếu code
 > và tài liệu lệch nhau, sửa code theo tài liệu, trừ khi quyết định mới của người dùng được
-> ghi vào Changelog. Các spec tách nhánh còn trên disk chỉ là bản hướng dẫn/mirror và không
-> được thắng file này.
+> ghi vào Changelog. Không duy trì spec tách nhánh hoặc tài liệu kiến trúc archived song
+> song; chi tiết vận hành chỉ nằm trong các runbook được liên kết từ README.
 
 **Cập nhật:** 28/08/2026
 **Thời gian còn lại:** 6 ngày
@@ -53,7 +53,7 @@ file này để lấy timestamp/frame chuẩn.
 | `frame_id` | int | Chỉ số frame thật trong MP4 — dùng cho preview và submission |
 | `pts_time` | float | Timestamp chuẩn (giây) — trục join giữa các modality |
 | `shot_id` | str | Định danh shot (từ TransNetV2) |
-| `window_id` | str \| null | Định danh video-window (nếu dùng window-based retrieval) |
+| `window_id` | str \| null | Trường tương thích catalog cũ; Online frame-level hiện hành không dùng để retrieval/rank |
 | `keyframe_uid` | int | Khóa deterministic BLAKE2b, dùng chung cho FAISS/OCR/ASR — xem §2.1d |
 
 ```python
@@ -521,177 +521,291 @@ quả rỗng thành “không có thoại”.
 
 ---
 
-## 3. Online Pipeline (Nhánh 2)
+## 3. Online Pipeline Accuracy-Max (Nhánh 2)
 
-```
-[Query text] ──> QueryPlanner (xem interface 3.1)
-                       │
-        ┌──────────────┼───────────────────────────┐
-        ▼ (Visual)      │                            │
-  clip.faiss  siglip.faiss  eva_clip.faiss           │
-        │            └──────┬──────┘                 │
-        │ (rollback     SRRF (siglip+eva_clip)        │
-        │  nếu thiếu)        │                        │
-        └──────────┬─────────┘                        │
-              score_visual (1 điểm/keyframe, §3.2 tầng 1)
-                   │          ▼ (OCR)         ▼ (ASR — spoken_text)
-                   │      SQLite FTS5    SQLite FTS5 (asr.sqlite)
-                   │      (ocr.sqlite)   (BM25 trên transcribed_text)
-                   └──────────────┼───────────────┘
-                                  ▼
-          Late Fusion tầng 2: Min-Max Normalization
-                  + trọng số thích ứng (§3.2 tầng 2)
-                         ▼
-                   Top 100 candidates
-                         ▼
-          Neighbors-Based Reranking (CPU)
-                         ▼
-        ┌────────────────┴────────────────┐
-        ▼ (TRAKE)                          ▼ (QA)
-  Beam Search +                    Multiplicative Gating
-  Exponential Decay                 (threshold 0.85)
-  (λ=0.01, beam=8)                        │
-        └────────────────┬────────────────┘
-                         ▼
-              frames.csv lookup (chuẩn hóa mốc thời gian)
-                         ▼
-              Dedup theo (video_id, frame_id)
-                         ▼
-                  Top 100 submission
+Mục tiêu vòng sơ tuyển là tìm **đúng video trước**, sau đó chọn frame/answer/sequence đúng
+cho KIS, QA hoặc TRAKE. Retrieval vẫn ở frame-level để giữ exact evidence; video ranking là
+lớp tổng hợp evidence, không tạo video embedding và không mean-pool vector.
+
+```text
+ArtifactRegistry: frames.csv + 3 FAISS + keyframes/videos + OCR/ASR tùy chọn
+        ↓
+SearchRequest + QuerySpec
+        ↓
+Unified Query Planner (Gemini → Qwen local → rule)
+        ↓
+Visual retrieval độc lập: SigLIP + EVA SRRF; CLIP comparison/rollback
+        + OCR/ASR FTS theo intent
+        ↓
+Multimodal fusion → temporal-neighbor boost
+        ↓
+Frame evidence → video hypotheses → VLM verification Top 4
+        ↓
+KIS | QA | TRAKE task head
+        ↓
+Confidence-adaptive Top 100 → Streamlit review → official CSV/ZIP validator
 ```
 
-### 3.1 Interface `QueryPlanner` — bắt buộc dùng chung cho mọi implementation
+### 3.1 Runtime boundary và code contract
+
+Critical path nằm trong `online/`; Streamlit gọi trực tiếp `OnlineEngine`, **không có
+FastAPI/backend trung gian**.
 
 ```python
-# shared/interfaces/query_planner.py
-from abc import ABC, abstractmethod
-from pydantic import BaseModel
-
-class UnifiedQueryPlan(BaseModel):
-    raw_query: str
-    caption_en: str
-    scenes: list[str]
-    must_have: list[str]
-    should_have: list[str]
-    negative_constraints: list[str]
-    visible_text: list[str]      # clue cho OCR
-    spoken_text: list[str]       # clue cho ASR
-    modality_weights: dict[str, float]  # {"visual": 0.6, "ocr": 0.4, ...}
-    question: str | None = None       # cho QA
-    answer_format: str | None = None  # cho QA
-    ordered_moments: list[str] | None = None  # cho TRAKE
-
-class QueryPlanner(ABC):
-    @abstractmethod
-    def plan(self, text: str, task_type: str) -> UnifiedQueryPlan:
-        ...
+OnlineEngine.search(SearchRequest) -> SearchRun
 ```
 
-**3 lớp implementation, theo đúng thứ tự ưu tiên:**
+`SearchRequest`:
 
-| Lớp | Class | Điều kiện dùng | VRAM |
-|---|---|---|---|
-| Primary | `GeminiQueryPlanner` | Có internet | 0 MB (Cloud API) |
-| Fallback 1 | `QwenLocalQueryPlanner` | Mất mạng, máy đủ VRAM | ~1.8 GB (Qwen3-VL-2B, 4-bit quantized) |
-| Fallback 2 | `RuleBasedQueryPlanner` | Cả API và local model đều lỗi | 0 |
-
-Fallback 2 = tạo 1 scene duy nhất chứa nguyên văn query, `modality_weights` mặc định
-`{"visual": 1.0}`. Không được throw exception ra ngoài — pipeline luôn phải trả về một
-`UnifiedQueryPlan` hợp lệ.
-
-**Quy tắc code:** không viết `if internet_available: call_gemini() else: ...` rải rác trong
-business logic. Chỉ một nơi duy nhất (factory function `get_query_planner()`) quyết định
-implementation nào được dùng, có cơ chế retry + timeout + circuit breaker để tự động rơi
-xuống lớp tiếp theo.
-
-### 3.2 Retrieval & Fusion
-
-Fusion chạy **2 tầng riêng biệt** — không được gộp chung thành 1 hàm/1 công thức. Lý do:
-visual có **3 index độc lập** (`clip.faiss`, `siglip.faiss`, `eva_clip.faiss`), trong khi OCR và
-ASR mỗi kênh chỉ có 1 nguồn điểm. Nếu code gộp cả 5 nguồn điểm (clip, siglip, eva_clip, ocr, asr)
-vào chung 1 Min-Max, `modality_weights["visual"]` sẽ bị pha loãng sai vì visual chiếm 3/5 vote
-thay vì đúng 1 vote như OCR/ASR.
-
-**Tầng 1 — Intra-visual fusion (gộp 3 embedding thành 1 điểm `score_visual`):**
-
-- Search song song cả 3 FAISS index cho mỗi query.
-- Gộp điểm SigLIP + EVA-CLIP bằng **Score-Reflected Reciprocal Rank Fusion (SRRF)** — giữ được
-  phân phối điểm tương đồng thực tế, không chỉ dựa vào rank thuần như RRF gốc.
-- **CLIP không tham gia SRRF.** CLIP giữ vai trò rollback: chỉ dùng làm `score_visual` chính
-  cho keyframe nào mà `siglip.faiss` hoặc `eva_clip.faiss` **chưa Ready** (theo Publishing
-  Criteria §2.3). Khi cả 3 index đã Ready cho video đó, `score_visual`
-  = kết quả SRRF(SigLIP, EVA-CLIP); điểm CLIP chỉ log lại để so sánh/tie-break, không cộng thêm
-  vào công thức.
-- Output tầng 1: đúng **1** con số `score_visual`/keyframe — đây là input duy nhất của tầng 2.
-
-**Tầng 2 — Inter-modal fusion (visual/ocr/asr):**
-
-- Visual: `score_visual` từ tầng 1 (frame-level, không phải shot-level mean-pooled).
-- OCR: SQLite FTS5 (`ocr.sqlite`), BM25, hỗ trợ exact phrase / full-term / partial / fuzzy match.
-- ASR: SQLite FTS5 (`asr.sqlite`), BM25 trên `transcribed_text`, chỉ kích hoạt trọng số cao khi
-  `UnifiedQueryPlan.spoken_text` không rỗng (câu hỏi có nhắc lời thoại/nhân vật nói).
-- Fusion: Min-Max Normalization mỗi kênh về `[0,1]`, nhân với `modality_weights` từ
-  `UnifiedQueryPlan` (3 khóa: `visual`, `ocr`, `asr`).
-
-```
-Score_normalized = (Score - Score_min) / (Score_max - Score_min)
-Score_final = Σ (w_channel × Score_normalized_channel)
+```text
+task_type: KIS | QA | TRAKE
+raw_query: str
+query_spec: QuerySpec | null
+max_results: 1..100 (default 100)
+mode: accurate
 ```
 
-**Quy tắc code:** tầng 1 (`fuse_visual_channels()`) và tầng 2 (`fuse_modalities()`) là 2 hàm
-riêng biệt trong `online/fusion.py`, gọi tuần tự — không viết gộp thành 1 hàm, để người đọc
-code sau này không nhầm "visual" là 1 index khi thực ra là 3.
+`QuerySpec` khóa `query_name`, `source_filename`, `task_type`, nguyên văn query và
+`expected_event_count` bắt buộc cho TRAKE. `SearchRun` trả query plan, artifact status,
+Top video hypotheses, Top task candidates, timing, provenance và warning. Mọi evidence dùng
+`keyframe_uid`; candidate/submission chỉ dùng `video_id` + `frame_id`.
 
-### 3.3 Reranking
+### 3.2 Startup preflight và ArtifactRegistry
 
-- **Bắt buộc trong baseline:** Neighbors-Based Reranking (CPU, dựa trên stable local
-  neighborhoods trong không gian đặc trưng).
-- **Stretch goal, không bắt buộc:** BLIP-2 ITM qua Cloud GPU (RunPod). Chỉ triển khai nếu
-  còn dư thời gian sau khi toàn bộ pipeline chính chạy ổn định. Không đưa vào critical path.
+Input bắt buộc:
 
-### 3.4 TRAKE
+1. `frames.csv` + state hợp lệ, đúng 293.336 keyframe/873 video cho catalog hiện hành.
+2. `clip.faiss`, `siglip.faiss`, `eva_clip.faiss` + state; đúng
+   `IndexIDMap(IndexFlatIP)`, dimension 512/768/768, revision model, catalog/UID-set và
+   checkpoint-resume provenance.
+3. Keyframe JPEG là bắt buộc để giữ đầy đủ thumbnail, contact sheet, VLM verification và
+   manual review của Accuracy-Max. Source MP4 **không phải điều kiện startup của vector
+   retrieval**, nhưng bắt buộc cho playback và FFmpeg exact-frame refinement; thiếu MP4
+   phải hiện degraded mode, không được giả đã decode frame nguồn.
 
-Beam Search + Exponential Decay gap penalty:
+Visual lỗi làm Online `NOT_READY`. OCR/ASR được phân loại độc lập:
 
+- `READY`: schema/integrity/UID join hợp lệ;
+- `UNAVAILABLE`: artifact chưa có, pipeline tự renormalize kênh còn lại;
+- `INVALID`: file tồn tại nhưng schema/hash/join sai, tắt modality và hiển thị lỗi.
+
+Production OCR mặc định ở `$AIC_DATA/index/ocr.sqlite`. Snapshot development chỉ được chọn
+bằng `AIC_OCR_SNAPSHOT_DIR=<snapshot directory>`; registry phải verify đúng ba file
+`ocr.sqlite`, `coverage.json`, `SHA256SUMS`, checksum, catalog SHA/count/video/UID-set,
+FTS5 count/integrity và join `(video_id,keyframe_uid)`. UI/provenance phải hiện snapshot ID,
+tier, coverage, error/missing và `production_ready=false`; cấm copy/đổi tên snapshot thành
+artifact final.
+
+Data retention của máy thi được chia ba lớp:
+
+- **Runtime core, cấm xóa:** `frames.csv` + state, ba FAISS + state, exact text-encoder
+  snapshot khớp revision và OCR/ASR artifact đang bật.
+- **Accuracy/review, nên giữ:** toàn bộ `$AIC_DATA/keyframes/`; giữ MP4 nếu cần playback
+  hoặc exact-frame refinement. Xóa/move MP4 không làm vector search fail nhưng làm mất hai
+  chức năng này.
+- **Rebuild/resume only:** raw visual embedding shard/mirror, shot/quality/plan/batch state,
+  OCR archive/source và detector/object intermediate. Online không đọc các path này sau khi
+  FAISS/OCR snapshot đã được deep-validate; chỉ được dọn khi immutable HF revision còn truy
+  cập được hoặc đã có backup ngoài máy.
+
+`$AIC_DATA/tmp/online-refinement/` là cache tái tạo được. Draft/CSV/ZIP trong
+`$AIC_DATA/submissions/` là dữ liệu người dùng, không tự động xóa.
+
+### 3.3 Unified Query Planner
+
+Thứ tự provider duy nhất:
+
+```text
+Gemini (default hiện hành gemini-3.5-flash-lite)
+  → Qwen3-VL-2B-Instruct local
+  → deterministic rule fallback
 ```
-λ_i = e^(-decay × Δt_i),  decay = 0.01,  beam_width = 8
-S_final_i = s_i × λ_i × b_i
+
+Planner output chuẩn:
+
+```text
+raw_query, caption_en, retrieval_queries[≤2], scenes[], anchor_moment_index,
+must_have[], should_have[], negative_constraints[], visible_text[], spoken_text[],
+modality_weights, question, answer_format, answer_source, ordered_moments[], planner_provider
 ```
 
-### 3.5 QA — Multiplicative Gating
+Quy tắc:
 
-Gating có 2 lớp: ngưỡng similarity (**bắt buộc**, luôn chạy) + xác thực BLIP-2 (**tùy chọn**,
-graceful degradation) — không chặn critical path nếu BLIP-2 chưa build kịp (§3.3 vẫn coi
-BLIP-2 là stretch goal), nhưng khi model đã sẵn sàng thì bắt buộc dùng để giảm false positive
-similarity (case kiểu BOGOTA/MEDELLIN: điểm similarity cao nhưng nội dung không thực sự khớp).
+- giữ nguyên query gốc để audit nhưng mọi visual query từ model phải là tiếng Anh;
+- `caption_en` là faithful global query bắt buộc; thêm tối đa một discriminative global query;
+- scene/event được giữ thành query độc lập, không nối câu dài và không mean-pool text vector;
+- không thêm người/vật/hành động/tên riêng ngoài query; negative constraint không thành hard
+  visual filter;
+- visible/spoken intent phải xuất phát từ query gốc. OCR dùng literal discriminative, ví dụ
+  “giá dầu mazut”, thay vì đưa toàn bộ câu hỏi nhiễu vào FTS;
+- fallback được ghi warning; rule fallback không được giả là đã dịch tiếng Anh.
 
-```python
-SIMILARITY_THRESHOLD = 0.85
+### 3.4 Visual retrieval và SRRF
 
-def blip2_verify(evidence, question) -> float:
-    """Trả 1.0 nếu BLIP-2 ITM chưa build/chưa load (graceful degradation — KHÔNG throw
-    exception). Trả điểm ITM thực (0-1) nếu model đã sẵn sàng. Giá trị 1.0 chỉ là default
-    khi thiếu model, không phải kết quả xác thực thật."""
-    ...
+Mỗi visual query được encode độc lập bằng đúng text encoder/revision của index, `float32` và
+L2-normalized. Cache key gồm model revision + query text. Trên Windows, Torch text encoder và
+Qwen mặc định chạy trong worker tách process để tránh xung đột OpenMP với FAISS.
 
-b_i = blip2_verify(best_evidence, query.question)
-S_final = best_evidence.score_visual * b_i
+Với mỗi query:
 
-if S_final > SIMILARITY_THRESHOLD:
-    answer = qwen_vqa.generate(best_evidence)
-else:
-    answer = "Uncertain"  # chặn lỗi copy thực thể từ query (case BOGOTA/MEDELLIN)
+1. search Top 1.000 SigLIP và Top 1.000 EVA;
+2. tạo union `keyframe_uid`;
+3. reconstruct vector qua internal position chỉ bên trong adapter để tính missing channel;
+4. fuse SigLIP/EVA bằng SRRF:
+
+```text
+smooth_rank_m(u) = 0.5 + Σ sigmoid(beta × (score_m(j) - score_m(u)))
+SRRF(u) = 1/(eta + smooth_rank_siglip(u)) + 1/(eta + smooth_rank_eva(u))
+eta=60, beta=40
 ```
 
-**Quy tắc:** `blip2_verify()` không được để pipeline QA phụ thuộc cứng vào việc BLIP-2 tồn
-tại — thiếu model thì log warning và trả 1.0, không crash. Interface đã có sẵn chỗ cắm `b_i`
-ngay khi model sẵn sàng, không phải sửa lại signature giữa chừng thi.
+SRRF được min-max normalize. Các query độc lập được gộp boost-only:
 
-### 3.6 Submission
+```text
+score_visual(u) = normalize(best_query_score + 0.1 × second_best_query_score)
+```
 
-- Dedup theo `(video_id, frame_id)` — không dùng `local_idx`.
-- Validator bắt buộc kiểm tra đúng số dòng quy định (tối đa 100) trước khi xuất file nộp.
-- Whitespace/empty query phải trả HTTP 422, không được để lọt thành 500.
+CLIP được search song song để ghi model agreement và tie-break video có score cách nhau tối
+đa `0,02`; CLIP không cộng vào `score_visual`. Nếu SigLIP hoặc EVA lỗi query-time, toàn
+retrieval rơi tường minh về CLIP và sinh warning; không trộn rollback âm thầm.
+
+### 3.5 OCR/ASR, fusion và temporal neighbors
+
+OCR FTS dùng `detected_text`; ASR FTS dùng `transcribed_text`. Search cascade:
+
+1. exact phrase;
+2. đủ token bằng AND;
+3. prefix candidate pool 5.000 row rồi rerank theo token coverage;
+4. fuzzy chỉ trên candidate hẹp.
+
+Các MATCH stage không so trực tiếp trị tuyệt đối BM25 giữa query khác nhau; thứ tự cascade
+luôn thắng trước, BM25 chỉ quyết định rank trong cùng stage.
+
+Trọng số intent mặc định:
+
+```text
+visual-only:                visual=1.00
+visible text:               visual=0.55, OCR=0.45
+spoken text:                visual=0.55, ASR=0.45
+visible + spoken:           visual=0.50, OCR=0.25, ASR=0.25
+```
+
+Mỗi channel min-max riêng rồi mới late-fuse. Modality thiếu không nhận score 0; trọng số các
+channel hiện có được renormalize về tổng 1.
+
+Với mỗi candidate, lấy tối đa hai neighbor trước/sau, ưu tiên cùng shot rồi theo `pts_time`:
+
+```text
+neighbor_support = mean(top-2 valid neighbor scores)
+score_reranked = normalize(frame_score + 0.15 × neighbor_support)
+```
+
+Đây là boost-only; không mean-pool neighbor và không loại sự kiện ngắn vì neighbor yếu.
+
+### 3.6 Frame evidence thành video hypothesis
+
+Khi tính score video, chỉ giữ evidence tốt nhất mỗi shot. Với mỗi query/scene `j`:
+
+```text
+evidence_j(v) = 0.7 × max(shot_scores) + 0.3 × mean(top-3 shot_scores)
+```
+
+```text
+base_video(v) =
+    0.40 × scene_coverage
+  + 0.25 × mean_scene_evidence
+  + 0.15 × weakest_scene
+  + 0.10 × global_query
+  + 0.10 × model_consensus
+```
+
+Scene coverage tính video xuất hiện trong Top 50 của từng scene. KIS/QA giữ Top 12 video;
+TRAKE giữ Top 20. Không hard-filter chỉ còn một video trước task head.
+
+### 3.7 VLM verification/reranking
+
+Verifier chạy tối đa Top 4 video, tối đa 36 frame/video, 12 frame/contact sheet. Provider:
+Gemini trước, Qwen local CUDA sau; thiếu cả hai giữ nguyên retrieval score và sinh warning.
+Quota mỗi search: tối đa 8 Gemini call và 300 giây; safe defaults 14 RPM, 225k TPM, 450 RPD.
+
+VLM trả scene match, must/should match và danh sách frame rank có cấu trúc:
+
+```text
+verified_video = 0.70 × base_video + 0.20 × must_have + 0.10 × should_have
+final_frame = 0.70 × retrieval_score + 0.30 × VLM_frame_score
+```
+
+Chỉ frame ID thật sự có trong output VLM mới được fuse. Frame bị VLM bỏ qua giữ nguyên
+retrieval score; partial output không phải negative evidence.
+
+### 3.8 Task heads
+
+#### KIS
+
+Toàn bộ scene dùng tìm đúng video; `anchor_moment_index` chỉ refine frame nộp. Anchor
+retrieval được merge/boost tối đa `0,15`, không thay hoặc giảm evidence gốc. Candidate pool
+giữ tối đa ba frame/shot để exact frame không bị hard-dedup.
+
+Top 100 có seed `video1, video1, video2, video1, video3`, sau đó weighted round-robin theo
+confidence: tối đa 40 row/video, video đầu mục tiêu 30–40 nếu đủ, Top 5 tối thiểu hai row và
+Top 12 tối thiểu một row. Ba frame đầu video #1 ưu tiên ba shot khác nhau; không padding hoặc
+duplicate.
+
+#### QA
+
+Dùng context để rank video, không đưa đáp án phỏng đoán vào retrieval. Nếu answer source là
+visible/spoken và SQLite tương ứng `READY`, answer được lấy trong candidate video; nếu là
+visual, Gemini → Qwen CUDA → unavailable dùng 6–12 frame evidence. Locator:
+
+```text
+locator = 0.60 × video_score + 0.40 × best_frame_score
+```
+
+Chỉ Top 1 video và `locator > 0,85` được auto hỏi answerer. Hai lượt VQA bất đồng hoặc thiếu
+provider trả `Uncertain` để operator sửa; `Uncertain`, answer rỗng hoặc quá 100 ký tự bị
+bulk-add/export chặn.
+
+#### TRAKE
+
+Mỗi `ordered_moment` chạy toàn retrieval độc lập. Video score:
+
+```text
+0.50 × moment_coverage + 0.20 × weakest_moment
++ 0.20 × mean_moment + 0.10 × model_consensus
+```
+
+Mỗi moment/video giữ Top 32 frame khác shot. Beam width 8, chỉ mở rộng frame cùng video,
+`pts_time` tăng nghiêm ngặt và không lặp frame. `trake_decay=0.0` mặc định để không phạt
+khoảng cách thời gian chưa được ground-truth calibrate. Sequence phải đủ đúng
+`expected_event_count`; UI cho thay neighbor nhưng vẫn validate thứ tự.
+
+### 3.9 Streamlit review và Top 100
+
+UI có hai tab:
+
+- `Top 100`: đúng thứ tự sẽ serialize vào CSV; KIS hiển thị thumbnail phân trang, QA là
+  hypothesis frame+answer, TRAKE là sequence hoàn chỉnh;
+- `Theo video`: nhóm evidence, score breakdown, scene matched/missing, temporal neighbor,
+  source video và exact-frame decode bằng FFmpeg `select=eq(n,frame_id)`.
+
+Search không tự thêm vào draft. Bulk-add là atomic và task-aware; nếu draft đã có dữ liệu,
+operator chọn replace hoặc merge-fill/dedup. Workspace tách theo `query_name`, giới hạn 100
+row riêng từng query và lưu atomic history/provenance ngoài submission ZIP.
+
+### 3.10 Submission profile duy nhất
+
+Profile duy nhất là `AIC26_QUALIFIER_OFFICIAL`:
+
+- một query = một CSV; tên `.txt` đổi đúng thành `.csv`;
+- 1–100 dòng, UTF-8 không BOM, comma, LF, không header, không `query_id`;
+- KIS: `video_id,frame_id`;
+- QA: `video_id,frame_id,answer`, answer tối đa 100 ký tự, CSV quoting chuẩn và giữ Unicode;
+- TRAKE: `video_id,frame_id_1,...,frame_id_N`, đúng N event, cùng video, timestamp tăng;
+- cấm `.mp4`, `local_idx`, path, score, duplicate hoặc frame ngoài `frames.csv`.
+
+ZIP phải chứa đủ và chỉ đủ `submission/<query_name>.csv`. Exporter bắt buộc serialize → đọc
+lại/validate CSV bytes → tạo ZIP → mở lại/validate entry và byte content → hiển thị row count
+và SHA-256. CSV riêng chỉ để inspection; ZIP PASS mới là file nộp chính thức.
 
 ---
 
@@ -699,19 +813,18 @@ ngay khi model sẵn sàng, không phải sửa lại signature giữa chừng t
 
 | Vai trò | Model | Môi trường | VRAM ước tính | Ghi chú |
 |---|---|---|---|---|
-| Query planning (primary) | Gemini 2.5 Flash-Lite | Cloud API | 0 MB | Cần internet |
-| Query planning (fallback) | Qwen3-VL-2B-Instruct | Local GPU, 4-bit | ~1.8 GB | Load/release theo pha |
+| Query planning (primary) | Gemini 3.5 Flash-Lite (operator có thể override) | Cloud API | 0 MB | Free-tier/quota được rate-limit; key chỉ ở environment |
+| Query planning (fallback) | Qwen3-VL-2B-Instruct | Local CUDA qua Torch worker | Peak đo thật ~4,13 GiB | Dùng chung runtime với VQA, không nạp hai bản |
 | Shot detection (offline) | TransNetV2 (`transnetv2-pytorch==1.0.5`) | Windows NVIDIA GPU; CPU reference/fallback; Colab T4 phụ | Ghi theo batch report | CUDA chọn tường minh, không fallback; phải qua parity gate CPU–CUDA |
 | Frame recall baseline | CLIP ViT-B/32 | Local/Kaggle | ~300 MB | Rollback an toàn |
 | Frame recall nâng cao | SigLIP + EVA-CLIP | Kaggle GPU (offline) | N/A (chạy batch, không online) | Build index nền |
-| OCR Tầng 1 | CRAFT (EasyOCR package) | Kaggle GPU theo shard | Đã đo dev5; production chưa chạy | Offline, weight pin, phủ toàn catalog |
-| OCR Tầng 2 | EasyOCR latin_g2 | Kaggle GPU theo shard | Đã đo dev5; production chưa chạy | Đọc mọi region CRAFT-positive; không tải weight lúc chạy |
+| OCR Tầng 1 | CRAFT (EasyOCR package) | Kaggle GPU theo shard | 9/9 archive hiện có | Phủ 293.336 UID; snapshot Online vẫn development-only |
+| OCR Tầng 2 | EasyOCR latin_g2 | Kaggle GPU theo shard | 278.091 FTS row hiện có | 15.188 no-text, 57 error; không gọi là final |
 | OCR Tầng 3 | Vintern-1B-v3.5 FP16 official | Kaggle T4 theo shard | Runtime PASS, router v2 dev-only | Revision/checksum pin; INT4 bị loại |
 | OCR Tầng 4 | Gemini 2.5 Flash-Lite dự kiến | Cloud API | 0 MB | Chưa pin/chưa gọi; chỉ residual sau exact count/token/cost và người dùng duyệt |
-| Reranking | Neighbors-Based (thuật toán, không phải model) | Local CPU | 0 MB | |
-| VQA / answer generation | Qwen3-VL-2B-Instruct | Local GPU, 4-bit | ~1.8 GB | Chỉ chạy khi qua Multiplicative Gating |
+| Reranking | Temporal neighbors + video evidence + VLM verification | Local CPU + Gemini/Qwen tùy chọn | Qwen peak đo thật ~4,19 GiB | VLM lỗi giữ retrieval score |
+| VQA / answer generation | Gemini → Qwen3-VL-2B-Instruct → unavailable | Cloud/local CUDA | Qwen peak đo thật ~4,19 GiB | Chỉ auto-answer khi locator >0,85; operator review là gate cuối |
 | ASR (nhánh 3, song song) | Whisper Large-v3 / phoWhisper | Kaggle/Colab GPU riêng (offline) | N/A (chạy batch, không online) | Xem §2A; human-in-the-loop giữ làm backup nếu coverage thiếu |
-| Reranking + QA verification (tùy chọn) | BLIP-2 ITM | Cloud GPU (RunPod) | N/A (cloud) | Stretch goal — dùng cho `b_i` trong QA gating (§3.5) và reranking (§3.3); graceful degradation nếu chưa sẵn sàng (`b_i = 1.0`), không chặn critical path |
 
 **Lưu ý vận hành:** tắt các tiến trình ngầm chiếm VRAM (LM Studio, Epic Games Launcher...)
 trước khi chạy inference local. Không chạy đồng thời Qwen planner + Qwen VQA nếu tổng VRAM
@@ -722,7 +835,6 @@ vượt 6 GB — load/release model theo pha.
 ## 5. Cấu trúc thư mục repo
 
 ```
-app/        # FastAPI backend
 offline/    # Pipeline tiền xử lý (shot detection, embedding, OCR, indexing)
 online/     # Query planning, retrieval, fusion, reranking, submission
 shared/     # Pydantic schemas, interfaces (QueryPlanner, FrameRecord), constants
@@ -734,35 +846,31 @@ Quy tắc: Pydantic schema định nghĩa trong `shared/`, dùng chung giữa `o
 
 ---
 
-## 6. Rủi ro còn treo — PHẢI xác nhận trước khi code phần liên quan
+## 6. Rủi ro/độ chưa hoàn thiện hiện hành
 
 | # | Câu hỏi | Ảnh hưởng nếu không xác nhận trước |
 |---|---|---|
-| 1 | Thể lệ AIC 2026 có cho phép internet trong phòng thi không? | Ảnh hưởng Query Planning online; OCR dùng SQLite đã build offline nên không phụ thuộc internet lúc thi |
-| 2 | Index frame-level (đã chốt) có đủ nhanh trên CPU khi dataset đầy đủ (kể cả batch 2) không? | Cần benchmark thật trên dev subset trước khi build full 177k+ keyframe |
-| 3 | CRAFT chạy full catalog và `latin_g2` xử lý overflow có kịp trong 6 ngày không? | Phải benchmark ảnh thật ở Gate 2 rồi chia 9 shard UID disjoint; không mở production nếu throughput dự kiến vượt deadline |
+| 1 | Accuracy regression trên bộ kiểm tra thủ công chưa đạt acceptance target đã đặt | Không tuyên bố baseline accuracy-complete chỉ từ preflight/test contract; phải chạy lại ground-truth Recall@12/100 |
+| 2 | OCR mới ở snapshot EasyOCR development, còn 57 error và chưa có Vintern/Gemini final | Dùng được để tăng recall visible-text nhưng phải hiện provenance và không gọi production-ready |
+| 3 | `asr.sqlite` chưa có | Spoken-text query chạy visual-only có warning; đây là lỗ hổng recall còn thật |
+| 4 | Gemini cloud model/quota có thể đổi | Pin bằng config lúc thi, rate-limit, giữ Qwen/rule fallback và prefetch local snapshot |
 
-Không mở production hoặc tự chốt threshold/throughput ở các mục trên trước khi có benchmark
-thật; code preflight/canary được phép nhưng phải fail closed và ghi rõ chưa production-verify.
+Không dùng HTTP 200, đủ 100 dòng hoặc artifact `READY` để suy ra accuracy PASS. Mọi tuyên bố
+accuracy phải gắn bộ query/ground truth, revision/config và metric tái lập.
 
 ---
 
-## 7. Checklist triển khai theo thứ tự ưu tiên
+## 7. Checklist closure hiện hành
 
-1. Khóa và test schema `FrameRecord`, `OcrResult`, `AsrSegment`,
-   `UnifiedQueryPlan`.
-2. Chạy Inventory full collection bằng `ffprobe`, **không `--limit`**, kiểm số video và
-   metadata trước Shot Detection.
-3. Dựng environment GPU, doctor PASS, parity TransNetV2 CPU–GPU 5/5 rồi chạy full shot batch
-   với checkpoint/resume.
-4. Trích keyframe Begin/Middle/End, benchmark blur/pHash trên dev subset rồi mới chốt threshold.
-5. Chạy song song: CLIP/SigLIP/EVA-CLIP + OCR ở Nhánh 1, Whisper/phoWhisper ở Nhánh 3.
-6. Build `frames.csv`, ba FAISS `IndexIDMap`, `ocr.sqlite`, `asr.sqlite`; chỉ publish
-   video qua đủ Publishing Criteria.
-7. Hoàn thiện Online: QueryPlanner fallback → SRRF visual → fusion visual/OCR/ASR →
-   reranking → TRAKE/QA → dedup/submission.
-8. A/B CLIP-only với SigLIP+EVA-CLIP và các threshold trên dev set có ground truth.
-9. Chỉ khi critical path đã ổn định mới làm BLIP-2 Cloud/RunPod như stretch goal.
+1. **CLOSED:** Inventory/shot/keyframe catalog 873 video, 293.336 keyframe.
+2. **CLOSED:** CLIP/SigLIP/EVA `IndexIDMap`, UID diff/norm/resume validation.
+3. **IMPLEMENTED:** Online Accuracy-Max, Top 100 UI, official CSV/ZIP validator.
+4. **INTEGRATED-DEVELOPMENT:** OCR EasyOCR snapshot 100% UID coverage; chưa final do 57 error
+   và chưa có tầng Vintern/Gemini terminal.
+5. **OPEN:** ASR artifact và spoken-text regression.
+6. **OPEN:** chạy lại bộ kiểm tra thủ công/ground-truth, chốt Video Recall@12,
+   Frame/shot Recall@100, QA evidence và TRAKE sequence accuracy.
+7. **OPEN:** freeze model/config/revision và deep preflight ngay trước vòng thi.
 
 ---
 
@@ -893,3 +1001,32 @@ thật; code preflight/canary được phép nhưng phải fail closed và ghi r
   full production bằng runner Standard khi estimate 651.803 VND vượt budget; estimate Batch
   325.902 VND chỉ là cơ sở cho quyết định/implementation Batch riêng. Cho phép Nhánh 2 dùng
   snapshot tier `easyocr` với `complete=false`, `production_ready=false`.
+- **28/08/2026 (bản 23)** — Sửa regression Online KIS sau phục hồi worktree: anchor
+  retrieval chuyển sang merge/boost-only, VLM không còn phạt frame bị bỏ qua trong partial
+  structured output, và Top 100 dùng weighted round-robin ngay sau seed Top 5 thay vì chèn
+  liền 30 frame của video đầu. Diagnostic Q8 xác nhận raw FAISS đã tìm đúng
+  `L23_V021/frame 6471`; bỏ hard-dedup một frame/shot khỏi candidate KIS vì frame `6471`
+  từng bị frame `6480` cùng shot thay thế. Bổ sung `caption_en` làm faithful query bắt buộc vì code cũ chỉ
+  search query expansion/scene/constraint. Vì vậy không rebuild embedding cho lỗi thuộc
+  Online Core này.
+- **28/08/2026 (bản 24)** — Tích hợp handoff OCR EasyOCR vào Online bằng snapshot path tường
+  minh `AIC_OCR_SNAPSHOT_DIR`, không copy/alias thành `$AIC_DATA/index/ocr.sqlite`. Registry
+  bắt buộc verify ba file snapshot, SHA-256, catalog/count/UID-set, FTS5/integrity và join
+  `(video_id, keyframe_uid)`; UI/provenance phải hiện snapshot ID, tier, coverage, error và
+  `production_ready=false`. Snapshot local từ HF revision
+  `a5dcff74326f43421553481793d4a1e51eb59ce5` phủ 293.336/293.336 UID, 873 video và có
+  278.091 FTS row; 57 frame CRAFT-detected nhưng EasyOCR text rỗng vẫn giữ `error`, không hạ
+  gate hoặc gọi artifact này là final. Planner đồng thời nhận diện cụm visible-text dạng
+  “giá dầu mazut được hiển thị” và tìm OCR bằng literal discriminative thay vì toàn câu.
+- **28/08/2026 (bản 25)** — Hợp nhất Online Accuracy-Max vào nguồn chuẩn duy nhất: bỏ
+  contract Min-Max/window-first/BLIP-2/FastAPI cũ khỏi §3, khóa `OnlineEngine` + Streamlit
+  trực tiếp, video-first evidence ranking, VLM verification, ba task head, Top 100 portfolio
+  và submission profile `AIC26_QUALIFIER_OFFICIAL`. FTS khóa thứ tự exact → AND → prefix →
+  fuzzy; prefix lấy pool 5.000 rồi rerank token coverage để từ phổ biến không lấn clue hiếm.
+  `CURRENT_STATUS.md` đổi từ append-only log sang snapshot hiện hành; README không còn xem
+  spec tách nhánh/tài liệu archived là instruction.
+- **29/08/2026 (bản 26)** — Theo xác nhận của người dùng, xóa implementation legacy
+  `backend/`, `frontend/`, 12 tài liệu archived và ZIP recovery; runtime duy nhất còn lại là
+  `online/` + Streamlit trực tiếp `OnlineEngine`. Khóa data-retention contract theo ba lớp:
+  runtime core, accuracy/review media và rebuild/resume-only; MP4 không chặn vector retrieval
+  nhưng thiếu MP4 làm mất playback/exact-frame refinement.

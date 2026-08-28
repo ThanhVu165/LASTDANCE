@@ -581,3 +581,15 @@ Dataset để build snapshot bằng `scripts.build_ocr_incremental_snapshot`. Sn
 biến và kèm `coverage.json` + `SHA256SUMS`; mọi batch ghi tier `easyocr`, toàn snapshot ghi
 `complete=false` và `production_ready=false`. Không copy JSONL/ZIP vào Git và không đặt tên
 snapshot này là `final`. Khi có tầng mới, tạo snapshot version mới thay vì ghi đè bản cũ.
+
+Sau khi build/validate, Online phải trỏ đúng thư mục bất biến, không trỏ thẳng một file lẻ:
+
+```powershell
+$env:AIC_OCR_SNAPSHOT_DIR = "$env:AIC_DATA\ocr\snapshots\ocr-snapshot-<UTC>-<hash>"
+python -m streamlit run online\streamlit_app.py
+```
+
+Mỗi lần đổi `snapshot_id` phải restart Streamlit. Registry fail closed nếu checksum,
+`catalog_sha256`, UID-set, FTS schema/count hoặc join video/UID sai; snapshot EasyOCR dù phủ
+đủ UID vẫn phải hiện `online_development_only`, tier/error count và
+`production_ready=false` cho đến terminal union cuối.

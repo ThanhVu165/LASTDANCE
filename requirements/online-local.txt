@@ -1,0 +1,19 @@
+# Local in-process Online runtime. A CUDA build with the same 2.6.x version satisfies
+# this constraint; keep the CUDA wheel source/platform choice outside this file.
+-r index.txt
+
+torch>=2.6,<2.7
+torchvision==0.21.0
+
+transformers==4.57.6
+huggingface-hub==0.36.2
+accelerate==1.12.0
+safetensors==0.8.0
+sentencepiece==0.2.1
+
+# EVA-CLIP exact text encoder.
+open-clip-torch==3.3.0
+timm==1.0.28
+
+# Operator review UI. SQLite FTS5 comes from CPython.
+streamlit==1.40.2

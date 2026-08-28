@@ -11,10 +11,10 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
 1. [`AGENTS.md`](AGENTS.md) - phạm vi và các invariant bắt buộc.
 2. [`docs/BASELINE_SPEC.md`](docs/BASELINE_SPEC.md) - baseline hợp nhất, thắng khi tài liệu
    chi tiết còn lệch.
-3. [`docs/OFFLINE_INDEXING_SPEC.md`](docs/OFFLINE_INDEXING_SPEC.md) - chi tiết Nhánh 1.
-4. [`docs/ASR_SPEC.md`](docs/ASR_SPEC.md) - data contract Nhánh 3.
-5. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) - trạng thái triển khai thực tế.
-6. [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) - môi trường Windows/Kaggle.
+3. [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) - snapshot trạng thái triển khai thực tế.
+4. [`docs/ONLINE_RUNBOOK.md`](docs/ONLINE_RUNBOOK.md) - Online, OCR snapshot, UI và submission.
+5. [`docs/ENVIRONMENT_SETUP.md`](docs/ENVIRONMENT_SETUP.md) - môi trường Windows/Kaggle.
+6. [`offline/README.md`](offline/README.md) - entry point Nhánh 1.
 7. [`docs/SHOT_DETECTION_RUNBOOK.md`](docs/SHOT_DETECTION_RUNBOOK.md) - chạy và bàn giao
    TransNetV2 giữa nhiều máy.
 8. [`docs/VISUAL_EMBEDDING_RUNBOOK.md`](docs/VISUAL_EMBEDDING_RUNBOOK.md) - chuẩn bị input,
@@ -24,7 +24,8 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
 10. [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md) - OCR phân tầng CRAFT → EasyOCR → Vintern
     → Gemini residual, snapshot SQLite development, JSONL resume và đồng bộ HF Dataset.
 
-Các tài liệu window-first cũ được giữ lại làm lịch sử, không còn là runtime instruction.
+ASR contract nằm trực tiếp trong `BASELINE_SPEC.md` §2A. Không duy trì spec/kiến trúc
+archived song song; lịch sử quyết định nằm trong Git và Changelog của baseline.
 
 ## Kiến trúc mới
 
@@ -45,14 +46,14 @@ audio
 Nhánh online sẽ gộp SigLIP + EVA-CLIP bằng SRRF thành đúng một `score_visual`; CLIP là
 rollback. Sau đó mới fusion visual/OCR/ASR. Nhánh 1 không build index visual đã gộp.
 
-## Cấu trúc repo trong giai đoạn migration
+## Cấu trúc repo hiện hành
 
 ```text
-offline/          # Nhánh 1 mới
-shared/schemas/   # FrameRecord, OcrResult, AsrSegment
+offline/          # Nhánh 1 Offline Indexing
+online/           # Nhánh 2 Accuracy-Max + Streamlit trực tiếp
+shared/           # Schema/interface dùng chung
 scripts/          # CLI local/Kaggle
-tests/            # contract test cho kiến trúc mới
-backend/app/      # implementation window-first cũ, chưa wire vào pipeline mới
+tests/            # contract/regression test
 ```
 
 ## Chạy lát cắt offline hiện tại
@@ -72,15 +73,15 @@ Laplacian/pHash quality manifest, `frames.csv` catalog builder và visual embedd
 builder cùng FAISS `IndexIDMap` builder/validator fail-closed. Weight
 TransNetV2 bundle trong package pin và được kiểm tra SHA-256 trước load; không tải weight
 trong lúc xử lý video. Batch runner có checkpoint/resume riêng theo từng video và chỉ nâng
-trạng thái sau khi manifest đã atomic-publish rồi validate lại. CLIP/SigLIP đã qua dev gate
-Kaggle T4; EVA-CLIP phải qua dev-subset interrupt/resume/validate trước production. OCR GPU
-chưa chạy trong lát cắt này.
+trạng thái sau khi manifest đã atomic-publish rồi validate lại. CLIP/SigLIP/EVA-CLIP đã
+hoàn tất 9/9 batch; local FAISS đã validate đủ 293.336 UID/873 video.
 
 OCR offline có contract CRAFT → EasyOCR mọi region → Vintern chỉ cho router v2 candidate,
 với confidence Vintern calibrate từ ground-truth trước khi được quyền override EasyOCR.
 Snapshot SQLite development được version/checksum và đồng bộ qua private HF Dataset bằng
 `scripts.publish_ocr_snapshot_hf`; xem [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md). Không
-commit snapshot/JSONL vào Git và không coi snapshot partial là production-ready.
+commit snapshot/JSONL vào Git và không coi snapshot development là production-ready. Online
+đã tích hợp snapshot EasyOCR bằng `AIC_OCR_SNAPSHOT_DIR`; ASR hiện còn thiếu.
 
 ## Invariant quan trọng
 

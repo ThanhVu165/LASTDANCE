@@ -14,6 +14,7 @@
 /.pytest_cache/
 /backend/.venv/
 /.venv-offline/
+/.venv-online/
 /.venv-shot-gpu/
 /.tools/
 **/__pycache__/

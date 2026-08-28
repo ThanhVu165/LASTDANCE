@@ -1,6 +1,6 @@
 # Runbook build FAISS độc lập theo modality
 
-Tài liệu này là entry point cho bước 3.2 của `OFFLINE_INDEXING_SPEC.md`: embedding shard
+Tài liệu này là entry point cho `BASELINE_SPEC.md` §2.1d/§2.3: embedding shard
 đã hoàn tất → `IndexIDMap(IndexFlatIP)`. Bước này chạy **CPU local**, không dùng quota
 Kaggle và không ảnh hưởng worker Shot Detection.
 

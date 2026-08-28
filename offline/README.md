@@ -1,7 +1,7 @@
 # Nhánh 1 - Offline Indexing
 
 Thư mục này triển khai Nhánh 1 theo nguồn chuẩn duy nhất `docs/BASELINE_SPEC.md` §2.
-`backend/app` là implementation window-first cũ và không được import vào nhánh này.
+Nhánh Online hiện hành nằm độc lập trong `online/` và chỉ nhận artifact qua contract đã khóa.
 
 ## Lát cắt hiện có
 

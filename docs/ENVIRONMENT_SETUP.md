@@ -1,8 +1,8 @@
 # Môi trường tái lập cho LASTDANCE frame-level
 
-Tài liệu này áp dụng cho Nhánh 1. Local/Shot target là CPython 3.11.9; Visual Embedding trên
-image Kaggle đã validate dùng CPython 3.12.x. Backend window-first cũ có environment riêng
-và không được trộn dependency vào `.venv-offline`.
+Tài liệu này áp dụng cho Nhánh 1 và artifact local. Local/Shot target là CPython 3.11.9;
+Visual Embedding trên image Kaggle đã validate dùng CPython 3.12.x. Online dùng
+`.venv-online` Python 3.11 theo `ONLINE_RUNBOOK.md`; không trộn dependency Kaggle vào local.
 
 ## 1. Các profile dependency
 
