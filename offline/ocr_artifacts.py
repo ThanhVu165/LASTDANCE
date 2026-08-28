@@ -18,8 +18,10 @@ _MAX_INT64 = (1 << 63) - 1
 
 
 class OcrEngine(StrEnum):
-    GEMINI = "gemini"
+    CRAFT = "craft"
     EASYOCR = "easyocr"
+    VINTERN = "vintern"
+    GEMINI = "gemini"
 
 
 class OcrStatus(StrEnum):
@@ -29,8 +31,17 @@ class OcrStatus(StrEnum):
 
 
 class OcrExecutionMode(StrEnum):
+    LAYERED_ESCALATION = "craft_easyocr_vintern_gemini"
+
+    # Superseded production/audit modes retained so old evidence remains readable.
+    CRAFT_GATED_GEMINI = "craft_gated_gemini"
     GEMINI_PRIMARY = "gemini_primary"
     EASYOCR_OFFLINE = "easyocr_offline"
+
+
+class OcrAttemptStage(StrEnum):
+    DETECTION = "detection"
+    RECOGNITION = "recognition"
 
 
 class OcrAttemptOutcome(StrEnum):
@@ -45,6 +56,7 @@ class OcrAttempt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     engine: OcrEngine
+    stage: OcrAttemptStage = OcrAttemptStage.RECOGNITION
     attempt_number: int = Field(ge=1)
     outcome: OcrAttemptOutcome
     latency_ms: int = Field(ge=0)
@@ -72,6 +84,10 @@ class OcrAttempt(BaseModel):
             raise ValueError("failed OCR attempts require error_code")
         if not failed and (self.error_code is not None or self.error_message is not None):
             raise ValueError("successful/no_text attempts cannot carry error metadata")
+        if self.engine == OcrEngine.CRAFT and self.stage != OcrAttemptStage.DETECTION:
+            raise ValueError("CRAFT attempts must use detection stage")
+        if self.engine != OcrEngine.CRAFT and self.stage != OcrAttemptStage.RECOGNITION:
+            raise ValueError("recognizer attempts must use recognition stage")
         return self
 
 
@@ -143,36 +159,108 @@ class OcrRecordEnvelope(BaseModel):
             raise ValueError("record engine must match the final attempt engine")
 
         easyocr_indexes = [
-            index
-            for index, attempt in enumerate(self.attempts)
+            index for index, attempt in enumerate(self.attempts)
             if attempt.engine == OcrEngine.EASYOCR
         ]
-        expected_fallback = (
-            self.execution_mode == OcrExecutionMode.GEMINI_PRIMARY
-            and bool(easyocr_indexes)
-        )
+        if self.execution_mode == OcrExecutionMode.LAYERED_ESCALATION:
+            if self.attempts[0].engine != OcrEngine.CRAFT:
+                raise ValueError("layered escalation must start with CRAFT detection")
+            recognition_attempts = self.attempts[1:]
+            if not recognition_attempts:
+                if self.attempts[0].outcome not in {
+                    OcrAttemptOutcome.NO_TEXT,
+                    OcrAttemptOutcome.RETRYABLE_ERROR,
+                    OcrAttemptOutcome.INVALID_RESPONSE,
+                    OcrAttemptOutcome.TERMINAL_ERROR,
+                }:
+                    raise ValueError("CRAFT text detection requires EasyOCR recognition")
+                expected_fallback = False
+            else:
+                if self.attempts[0].outcome != OcrAttemptOutcome.SUCCESS:
+                    raise ValueError("recognition requires successful CRAFT text detection")
+                if recognition_attempts[0].engine != OcrEngine.EASYOCR:
+                    raise ValueError("layered escalation must run EasyOCR before Vintern/Gemini")
+                if any(
+                    attempt.stage != OcrAttemptStage.RECOGNITION
+                    or attempt.engine == OcrEngine.CRAFT
+                    for attempt in recognition_attempts
+                ):
+                    raise ValueError("CRAFT can only appear as the first detection attempt")
+                engine_rank = {
+                    OcrEngine.EASYOCR: 0,
+                    OcrEngine.VINTERN: 1,
+                    OcrEngine.GEMINI: 2,
+                }
+                ranks = [engine_rank[attempt.engine] for attempt in recognition_attempts]
+                if any(current < previous for previous, current in zip(ranks, ranks[1:])):
+                    raise ValueError("recognition engines cannot resume after escalation")
+                if any(current - previous > 1 for previous, current in zip(ranks, ranks[1:])):
+                    raise ValueError("layered escalation cannot skip Vintern before Gemini")
+                expected_fallback = recognition_attempts[-1].engine != OcrEngine.EASYOCR
+        elif self.execution_mode == OcrExecutionMode.CRAFT_GATED_GEMINI:
+            if self.attempts[0].engine != OcrEngine.CRAFT:
+                raise ValueError("craft_gated_gemini must start with CRAFT detection")
+            recognition_attempts = self.attempts[1:]
+            if not recognition_attempts:
+                if self.attempts[0].outcome not in {
+                    OcrAttemptOutcome.NO_TEXT,
+                    OcrAttemptOutcome.RETRYABLE_ERROR,
+                    OcrAttemptOutcome.INVALID_RESPONSE,
+                    OcrAttemptOutcome.TERMINAL_ERROR,
+                }:
+                    raise ValueError("CRAFT text detection requires a recognition attempt")
+            else:
+                if self.attempts[0].outcome != OcrAttemptOutcome.SUCCESS:
+                    raise ValueError("recognition requires successful CRAFT text detection")
+                if any(
+                    attempt.stage != OcrAttemptStage.RECOGNITION
+                    or attempt.engine == OcrEngine.CRAFT
+                    for attempt in recognition_attempts
+                ):
+                    raise ValueError("CRAFT can only appear as the first detection attempt")
+                first_easyocr = next(
+                    (
+                        index
+                        for index, attempt in enumerate(recognition_attempts)
+                        if attempt.engine == OcrEngine.EASYOCR
+                    ),
+                    None,
+                )
+                if first_easyocr is not None and any(
+                    attempt.engine != OcrEngine.EASYOCR
+                    for attempt in recognition_attempts[first_easyocr:]
+                ):
+                    raise ValueError("Gemini cannot resume after EasyOCR recognition fallback")
+            expected_fallback = bool(recognition_attempts) and (
+                recognition_attempts[-1].engine == OcrEngine.EASYOCR
+            )
+        elif self.execution_mode == OcrExecutionMode.EASYOCR_OFFLINE:
+            if any(attempt.engine != OcrEngine.EASYOCR for attempt in self.attempts):
+                raise ValueError("EasyOCR-only mode cannot contain Gemini attempts")
+            expected_fallback = False
+        else:
+            if any(attempt.engine == OcrEngine.CRAFT for attempt in self.attempts):
+                raise ValueError("legacy gemini_primary cannot contain CRAFT attempts")
+            if easyocr_indexes:
+                first_easyocr = easyocr_indexes[0]
+                if any(
+                    attempt.engine != OcrEngine.GEMINI
+                    for attempt in self.attempts[:first_easyocr]
+                ) or any(
+                    attempt.engine != OcrEngine.EASYOCR
+                    for attempt in self.attempts[first_easyocr:]
+                ):
+                    raise ValueError("Gemini attempts cannot resume after EasyOCR fallback")
+                if not any(
+                    attempt.outcome == OcrAttemptOutcome.INVALID_RESPONSE
+                    for attempt in self.attempts[:first_easyocr]
+                ):
+                    raise ValueError(
+                        "EasyOCR per-keyframe fallback requires a prior invalid Gemini response"
+                    )
+            expected_fallback = bool(easyocr_indexes)
         if self.fallback_used != expected_fallback:
             raise ValueError("fallback_used does not match the attempt history")
-        if self.execution_mode == OcrExecutionMode.EASYOCR_OFFLINE:
-            if any(attempt.engine != OcrEngine.EASYOCR for attempt in self.attempts):
-                raise ValueError("easyocr_offline mode cannot contain Gemini attempts")
-        elif easyocr_indexes:
-            first_easyocr = easyocr_indexes[0]
-            if any(
-                attempt.engine != OcrEngine.GEMINI
-                for attempt in self.attempts[:first_easyocr]
-            ) or any(
-                attempt.engine != OcrEngine.EASYOCR
-                for attempt in self.attempts[first_easyocr:]
-            ):
-                raise ValueError("Gemini attempts cannot resume after EasyOCR fallback")
-            if not any(
-                attempt.outcome == OcrAttemptOutcome.INVALID_RESPONSE
-                for attempt in self.attempts[:first_easyocr]
-            ):
-                raise ValueError(
-                    "EasyOCR per-keyframe fallback requires a prior invalid Gemini response"
-                )
 
         if self.status == OcrStatus.SUCCESS:
             if final_attempt.outcome != OcrAttemptOutcome.SUCCESS or self.result is None:

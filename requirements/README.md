@@ -6,7 +6,9 @@ Local/Shot target runtime is CPython 3.11.9. Kaggle Visual target runtime is CPy
 | File | Purpose | Machine |
 |---|---|---|
 | `dev.txt` | schema/unit tests, no model | any CPU machine |
-| `offline-local.txt` | inventory, TransNetV2 CPU, filtering, FAISS build | local Windows/Linux |
+| `offline-local.txt` | inventory, TransNetV2 CPU, filtering, FAISS build, HF artifact sync | local Windows/Linux |
+| `ocr-api.txt` | Gemini residual audit/canary only; không dùng trước quyết định Tầng 4 | orchestration CPU hoặc Kaggle |
+| `ocr-kaggle-gpu.txt` | CRAFT + EasyOCR Tầng 1–2; Vintern FP16 pin riêng trong policy | Kaggle GPU OCR |
 | `shot-windows-gpu.txt` | TransNetV2 CUDA 12.6, Torch 2.12.1 | Windows NVIDIA GPU |
 | `shot-colab-gpu.txt` | TransNetV2 CUDA shot detection, giữ Torch có sẵn | Google Colab T4 |
 | `kaggle-gpu.txt` | CLIP/SigLIP/EVA-CLIP batch embedding | Kaggle GPU |

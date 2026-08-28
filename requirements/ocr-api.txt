@@ -1,0 +1,5 @@
+# Gemini OCR audit/canary transport. EasyOCR runtime remains separately pinned by
+# configs/ocr_easyocr_models.json because its Torch build depends on the target machine.
+-r base.txt
+
+httpx==0.28.1

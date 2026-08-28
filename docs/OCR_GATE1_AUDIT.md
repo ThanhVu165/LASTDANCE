@@ -1,8 +1,10 @@
 # OCR Gate 1 audit — 26/08/2026
 
-Kết luận hiện tại: **BLOCKED — chưa được sang Gate 2**. Catalog production, EasyOCR pin,
-artifact envelope và strict-schema canary đã có bằng chứng thật; blocker còn lại là năng lực
-Free tier hiện tại không đáp ứng deadline production.
+Kết luận hiện tại: **GATE 1 còn một blocker — canary lại final request contract**. Kiến trúc
+đã được người dùng làm rõ là CRAFT gate toàn catalog, Gemini nhận dạng crop có chữ theo một
+contact-sheet/shot, `latin_g2` fallback. Catalog, weight provenance, envelope/router và quota
+đã có; canary 10 shot cũ chưa dùng response `region_id` + `MEDIA_RESOLUTION_MEDIUM`, nên chỉ
+là evidence tham khảo và không được dùng để mở Gate 2.
 
 ## 1. Catalog thật — PASS
 
@@ -33,11 +35,13 @@ Archive được đọc streaming tới hết ba member cần thiết (64.184.32
 embedding archive. Vì vậy checksum archive đầy đủ không được tuyên bố đã verify; kết luận
 catalog dựa trên catalog SHA-256 khớp độc lập qua mapping remote + mapping nhúng + state.
 
-## 2. Gemini tier/quota/canary — PASS kỹ thuật, BLOCKED năng lực production
+## 2. Gemini tier/quota/canary — quota PASS, final-contract canary PENDING
 
 - Project đã verify trực tiếp trong Google AI Studio: ID `gen-lang-client-0009440353`,
-  project number `823595296842`, Free tier. Active quota của đúng project/model là
-  **15 RPM, 250.000 input TPM, 500 RPD**.
+  project number `823595296842`, Free tier. Bảng Rate Limit của đúng project hiển thị:
+  `gemini-3.1-flash-lite` **15 RPM, 250.000 input TPM, 500 RPD** (snapshot usage
+  3/15 RPM, 6,96K/250K TPM, 8/500 RPD) và `gemini-3.5-flash-lite` cùng trần (snapshot đã
+  vượt 17/15 RPM, 25,28K/250K TPM, 505/500 RPD).
 - `gemini-2.5-flash-lite` trả HTTP 404 với thông báo không còn cấp cho user mới. Model đã
   canary thật là `gemini-3.5-flash-lite`; response trả catalog version
   `3.5-flash-lite-07-2026`. Không dùng alias `latest` và không được diễn giải canary này là
@@ -53,15 +57,30 @@ catalog dựa trên catalog SHA-256 khớp độc lập qua mapping remote + map
   trong 6 ngày chỉ xử lý tối đa 3.000 request (~1,023% catalog). TPM không phải bottleneck;
   RPD là bottleneck quyết định.
 
+Canary tham khảo pin `gemini-3.1-flash-lite`: detector local tạo crop-sheet của ba
+keyframe/shot, adapter giữ bbox gốc. Trên 10 synthetic shot (30 frame), 10/10 request thành
+công, schema-valid 100%, synthetic line recall 90/90, tổng 12.500 input + 2.574 output token,
+trung bình 1.250 + 257,4 token/shot, latency min/max 1.984/6.114 ms. Summary SHA-256
+`97944101f2eaec1533b6cfc8c59d4cae1934f17224821d6af2955f6e745d7fab`; đây chỉ là
+schema/token evidence, `production_recall_claimed=false`. Nó đã bị supersede vì response khi
+đó gom text theo `frame_id`, chưa exact-set `region_id`, chưa tách ba `keyframe_uid` trong
+request provenance và chưa đặt global `MEDIA_RESOLUTION_MEDIUM`.
+
+Theo giá Batch pin trong config ($0,125/M input, $0,75/M output) và tỷ giá vận hành
+26.300 VND/USD, nếu tỷ lệ token synthetic giữ nguyên thì 97.810 shot có giá lý thuyết
+~$34,17/~898.540 VND, hoặc ~$39,29/~1.033.321 VND với reserve 15%. Vì ảnh thật có thể
+khác và người dùng đã chốt budget cứng, production vẫn giới hạn **20.000 paid frame và
+400.000 VND**; không dùng phép chiếu synthetic để tự nâng cap.
+
 Evidence sanitize nằm tại
 `tmp/ocr-gate1/gemini-canary/strict-schema-gate1-summary-20260826.json`, SHA-256
 `c06c86eb12a6721edaf78622145a230faec5b0cee335734e7c95a51f390ac921`; thư mục `tmp/`
 không commit. Không có API key/header nhạy cảm trong summary.
 
-Thiếu để Gate 1 PASS: duyệt một phương án throughput/cost rồi canary lại đúng cấu hình đó.
-Các ứng viên hiện mới là kế hoạch, chưa phải bằng chứng production: audit account/project cũ
-cho quyền truy cập model rẻ hơn; gom ba keyframe cùng shot vào một request; hoặc CRAFT local
-lọc/crop vùng chữ trước Gemini. Không dùng embedding đơn độc để kết luận `no_text`.
+Quyết định đã chốt: CRAFT là detector gate; CRAFT `no_text` không gọi cloud. Gemini 3.1 là
+recognizer primary cho crop CRAFT-positive, còn `latin_g2` nhận overflow/cloud stop. Ba
+keyframe/shot dùng một request. Embedding chỉ xếp lịch; reuse một frame cần đồng thời
+embedding + CRAFT layout + crop SSIM + pHash. Không phụ thuộc vào gom nhiều tài khoản.
 
 ## 3. EasyOCR provenance + offline bytes — PASS (checksum audit)
 
@@ -78,16 +97,21 @@ SHA-256, size và MD5 upstream của cả hai extracted weight đã verify bằn
 Registry/CLI ép `download_enabled=False`. Phiên này chỉ PASS provenance/checksum; runtime
 Reader trên profile production vẫn phải chạy preflight package-version đầy đủ trước Gate 2.
 
-## 4. Artifact envelope — PASS
+## 4. Artifact envelope + routing policy — PASS bằng unit test
 
 - `OcrResult` và `ocr_fts` không đổi.
 - Record envelope schema v1 giữ `video_id`, `keyframe_uid`, `frame_id`, relative image path,
   execution mode, `success/no_text/error`, engine/fallback/attempt provenance và
-  `OcrResult | null`.
+  `OcrResult | null`. Production dùng `craft_gated_gemini`; attempt ghi stage detection/
+  recognition. CRAFT `no_text` terminal không có Gemini attempt; overflow kết thúc bằng
+  EasyOCR recognition với `fallback_used=true`.
 - Bbox canonical là normalized clockwise quadrilateral 8 số; `no_text` không tạo language
   giả. Completion gate yêu cầu exact UID, `error=0`, không duplicate/missing/foreign.
-- Chín JSONL shard là artifact merge; chỉ build một SQLite final sau union disjoint và
-  exhaustive. Global auth/quota failure không được biến thành EasyOCR bulk fallback.
+- Chín JSONL terminal shard phải exhaustive/disjoint. Contact sheet trả region rows; adapter
+  map `region_id` về UID/frame/bbox local. Chỉ build một SQLite sau exact UID; auth/quota/
+  budget stop xuất routing state rồi dùng fallback job, không biến crop chưa xử lý thành
+  `no_text`.
 
-Verification: 9 unit test mới PASS cho checksum tamper detection, UID recomputation,
-envelope geometry/fallback invariant và completion gate `success + no_text`.
+Policy schema v2 nằm ở `configs/ocr_escalation_policy.json`; router gom shot và fail closed
+theo cả 20.000 frame/400.000 VND. Final-contract canary và ảnh thật vẫn pending; chưa có claim
+recall hoặc throughput production.

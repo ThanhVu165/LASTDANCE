@@ -1,10 +1,10 @@
 # Nhánh 1 — Offline Indexing Pipeline (Bản chốt)
 
-> File này là nguồn chuẩn riêng cho **Offline Indexing**, trích và sửa từ `BASELINE_SPEC.md`.
-> Đây là artifact mà Nhánh 1 phải bàn giao cho Nhánh 2 (Online Retrieval) — Nhánh 2 chỉ được
-> code dựa trên đúng schema và điều kiện nghiệm thu mô tả ở đây, không tự suy đoán thêm.
+> File này là bản hướng dẫn chi tiết cho **Offline Indexing**, đồng bộ từ
+> `BASELINE_SPEC.md`. `BASELINE_SPEC.md` vẫn là Source of Truth duy nhất; nếu hai file lệch,
+> dừng và sửa bản hướng dẫn này theo baseline đã được người dùng duyệt.
 
-**Cập nhật:** 23/08/2026
+**Cập nhật:** 28/08/2026
 **Mục tiêu:** chuyển 500GB video thô → ~80GB keyframe + <5GB vector/text index, nạp vừa RAM máy local.
 
 ---
@@ -43,7 +43,7 @@ Chạy **Kaggle GPU** theo batch.
 | Bước | Model | Hành động | Output |
 |---|---|---|---|
 | 2.1 Visual Embedding | **CLIP ViT-B/32** (baseline/rollback) + **SigLIP** + **EVA-CLIP** | Chạy song song 3 model, lấy vector cho **từng keyframe riêng lẻ**. **Bắt buộc ép về `float16`** trước khi lưu file (giảm 50% dung lượng, giảm băng thông push/pull HF Dataset — xem mục 6) | `.npy`/`.bin`, dtype `float16` |
-| 2.2 OCR Extraction | **Gemini 2.5 Flash-Lite API** (primary) / **EasyOCR** (fallback offline) | Đọc chữ tĩnh trên keyframe (biển hiệu, logo, chữ chạy) theo JSON prompt schema cố định — dùng chung `OcrResult` với `BASELINE_SPEC.md` §2.2 | `.json`/keyframe: `{"frame_id": ..., "detected_text": [...], "bbox": [...], "confidence": 0.95, "language": "vi"}` |
+| 2.2 OCR Extraction | **CRAFT → EasyOCR → Vintern FP16 calibrated override khi sẵn có → Gemini residual** | Vintern chỉ chạy candidate router v2 và chỉ override khi empirical bucket confidence > EasyOCR gốc; Vintern không còn chặn pre-Gemini: batch thiếu archive Vintern đưa candidate router v2 thẳng sang Gemini với provenance rõ. Gemini vẫn chỉ chạy sau exact count/token/cost và người dùng duyệt. Dùng chung `OcrResult` với `BASELINE_SPEC.md` §2.2 | JSONL/manifest + override/bypass audit theo batch, sau union build `ocr.sqlite` |
 
 ---
 
@@ -133,6 +133,11 @@ index.add_with_ids(vectors, keyframe_uids)  # không quan tâm thứ tự add
 3. **`ocr.sqlite`** — toàn bộ text OCR, tìm kiếm BM25.
 4. **Relative Path Convention** — mọi path build từ `AIC_DATA`, không hardcode tuyệt đối.
 
+Trong lúc OCR production chưa hoàn tất, Nhánh 1 được bàn giao snapshot development bất biến
+`ocr/snapshots/<snapshot_id>/{ocr.sqlite,coverage.json,SHA256SUMS}`. Snapshot giữ đúng bảng
+`ocr_fts` nhưng sidecar luôn `complete=false`/`production_ready=false`, nêu coverage và tầng
+OCR theo từng video. Nó chỉ phục vụ code/test Nhánh 2, không thay artifact final mục 3.
+
 ---
 
 ## 5. Publishing Criteria — điều kiện để index được coi là "Ready"
@@ -199,3 +204,18 @@ Kaggle Notebook (build) --push_to_hub()--> HF Dataset (Git LFS) --snapshot_downl
   Contract bàn giao đổi trực tiếp từ `beit3.faiss` sang `eva_clip.faiss`; công thức
   `keyframe_uid`, `IndexIDMap`, khả năng build độc lập và toàn bộ Publishing Criteria giữ
   nguyên.
+- **28/08/2026 (bản 5)** — Đồng bộ quyết định OCR bản 13 trong `BASELINE_SPEC.md`: EasyOCR
+  đổi từ fallback thành recognizer Tầng 2 cho mọi region CRAFT-positive; Vintern FP16
+  official là Tầng 3/router v2; Gemini chỉ là residual/arbiter Tầng 4 và chưa được gọi trước
+  quyết định chi phí. Tầng 1–3 chạy trên Kaggle GPU, tối đa bốn tài khoản với batch
+  UID-disjoint; mọi JSONL/manifest phải push vào cùng HF Dataset rồi local
+  `snapshot_download()` trước khi union và build một `ocr.sqlite`. Không đổi schema
+  `ocr_fts`.
+- **28/08/2026 (bản 6)** — Bổ sung handoff snapshot OCR development theo baseline bản 14:
+  path versioned/immutable trong cùng HF Dataset, SQLite schema giữ nguyên, sidecar coverage
+  bắt buộc và luôn `complete=false`. Snapshot cho phép Nhánh 2 làm song song nhưng không
+  được dùng để đánh dấu Publishing Ready hoặc submission.
+- **28/08/2026 (bản 7)** — Ghi nhận handoff tạm OCR production ở tier `easyocr`: đủ 9/9
+  archive, 293.336 keyframe đã verify trên private HF Dataset; chưa Vintern, chưa Gemini và
+  chưa có `ocr.sqlite` final. Nhánh 2 được build/pull snapshot development theo §6 nhưng phải
+  giữ `complete=false`, `production_ready=false` và coverage tier rõ ràng.

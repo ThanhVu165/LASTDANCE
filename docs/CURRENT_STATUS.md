@@ -1,6 +1,6 @@
 # Trạng thái hiện tại của LASTDANCE
 
-Cập nhật: 27/08/2026.
+Cập nhật: 28/08/2026.
 
 ## Visual Embedding — CLOSED/PASS ngày 27/08/2026
 
@@ -217,6 +217,317 @@ cùng `video_id` phải bị xem là xung đột và không merge tự động.
 
 > Cập nhật CUỐI mỗi phiên Codex, trước khi đóng session — dù account nào cũng đọc file này
 > đầu tiên sau `AGENTS.md`. Không xóa lịch sử cũ, chỉ thêm mục mới lên đầu.
+
+---
+
+### [28/08/2026] OCR Gate A — 300-frame CRAFT threshold pilot sẵn sàng chạy
+
+- Thêm policy pre-register `configs/ocr_craft_gate_a_policy.json`: đúng 300 frame/
+  5 video/60 unique shot mỗi video, ba config `0,6/0,3/0,3`, `0,7/0,4/0,4`,
+  `0,8/0,5/0,5`; bắt buộc region recall `>=0,98` và text-frame recall `>=0,99`.
+- Thêm `scripts/build_ocr_gate_a_mini_dataset.py` và chuyển notebook Kaggle
+  `scripts/kaggle_ocr_craft_gate_a_threshold_pilot.ipynb` sang Dataset mini 300 ảnh đã pin
+  ZIP/manifest SHA-256. Notebook verify UID + checksum từng ảnh, CRAFT checksum, chạy 900
+  detector pass có resume và xuất review bundle 300 ảnh 2×2; không còn quét Dataset AIC đầy
+  đủ. Không chạy recognition, Vintern, Gemini hay tự PASS khi CSV nhãn còn trống.
+- Thêm evaluator CPU `scripts.evaluate_ocr_craft_gate_a`: validate exact sample/config/
+  threshold/human labels, đo recall/false-positive/regions-per-frame và chỉ mở Gate B nếu
+  recall gate đạt. Bundle cũ 250 crop không thay thế Gate A vì thiếu no-text control và nhãn
+  human hoàn chỉnh. Notebook mới compile tĩnh PASS; chưa chạy Kaggle nên Gate A vẫn pending.
+- Không commit/push Git; chưa mở production 9 batch và chưa dùng Gemini.
+
+### [28/08/2026] OCR Gate A — emergency contract 100 nhãn đã đánh giá
+
+- Người dùng quyết định giảm human review còn 100 do chỉ có một annotator và deadline.
+  Exact UID-set là 100 dòng đầu bundle: 60 V001 + 40 V002; tất cả đều được gán có chữ,
+  vì vậy no-text false-positive rate không đo được và evidence không cân bằng năm video.
+- Kết quả: `recall_current=92,56%`, `balanced=89,73%`, `strict=85,57%` region recall;
+  text-frame recall cả ba là 100%. Không config nào đạt region recall 98%.
+- Policy schema v2 không hạ quality gate và không gọi đây là PASS. Decision là
+  `DEADLINE_OVERRIDE_KEEP_CURRENT`, giữ CRAFT `0,6/0,3/0,3` và cho phép chạy full dev5 Gate B
+  để lấy evidence rộng hơn. Report/UID-set/policy hash và limitation đều fail-closed.
+
+- Gate B tại `scripts/kaggle_ocr_gate_b_dev5_calibrated.ipynb` đọc
+  report/hash/selected threshold thay vì hardcode và vẫn rerun full dev5. Theo deadline,
+  review Vintern giảm xuống đúng 100 candidate/100 distinct frame, 20/video, stratify
+  deterministic; đây là `emergency_single_annotator_100`, không phải standard 300-frame
+  PASS. Checkpoint refresh mỗi 250 item, tự restore qua session mới và dựng lại crop từ bbox;
+  nếu Vintern đã hoàn tất thì bỏ qua tải model. Runtime Kaggle đã PASS: đủ 4.164 frame,
+  41.212 region, 14.883/14.883 Vintern result, không runtime error; EasyOCR 24,0 phút và
+  Vintern 73,9 phút trên một T4.
+
+---
+
+### [28/08/2026] OCR Gate B — chốt Vintern calibrated override; HF snapshot đã verify
+
+- Theo quyết định người dùng, Vintern vẫn chỉ chạy sau EasyOCR trên candidate router v2,
+  không chạy song song mọi region. Thêm calibration CPU dùng đúng result từ inference Gate B:
+  exact-match ground-truth theo bucket output length/guard margin/log-prob (nếu có), support
+  tối thiểu và backoff deterministic; không dùng self-confidence, không chạy model lần hai.
+- Rule materialize: guard PASS và empirical Vintern confidence phải lớn hơn nghiêm ngặt
+  EasyOCR confidence của cùng region. JSONL audit giữ bucket/support/correct, text/confidence
+  cũ-mới, quyết định và final engine; SQLite vẫn đúng năm cột. Snapshot kế tiếp sẽ mang tier
+  `easyocr_vintern_calibrated`/“EasyOCR+Vintern calibrated”. Ground-truth deadline tier đã
+  materialize từ 98/100 frame; hai crop sample 15/24 bị loại là unreadable. Đây vẫn là
+  calibration-set evidence, chưa phải holdout accuracy PASS.
+- Thêm `scripts.calibrate_ocr_vintern_gate_b`, policy
+  `configs/ocr_vintern_calibration_policy.json`, adapter snapshot calibrated và contract test.
+- Policy calibration đã nâng schema v2 cho emergency 100: bucket fine/structural thiếu
+  support 20 không được lùi về global để override. Vùng không đủ bằng chứng giữ EasyOCR và
+  được ghi rõ là Gemini residual; chưa gọi Gemini.
+- Excel đã làm tròn 272 ô immutable trong CSV người dùng; script
+  `scripts.repair_ocr_gate_b_ground_truth` phục hồi toàn bộ từ review ZIP, chỉ giữ năm cột
+  human-label. Policy deadline schema v3 cho phép đúng 2 exclusion và dùng 98 labeled frame.
+  Calibration CPU PASS, không gọi model: EasyOCR exact-match `10/98=10,2%`, Vintern
+  `34/98=34,7%`; Vintern-only đúng 31, EasyOCR-only đúng 7, cả hai sai 57. Materialization
+  tạm thời override 8.997/14.883 candidate và còn 5.886 residual trên 2.886 frame/1.271
+  shot dev5. Chưa mở production vì residual ngoại suy còn khoảng 414.644 region và evidence
+  98 mẫu không phải holdout.
+- Snapshot EasyOCR-only hiện tại đã upload thành công lên private Dataset
+  `MinhThuw0103/lastdance-visual-embeddings` dưới
+  `ocr/snapshots/ocr-snapshot-20260827T195734Z-85dd095d6ba9/` bằng đúng một commit
+  `15f2f3bed29a9f89683b01ba24b30578849b20bd`. Uploader đã
+  `snapshot_download(revision=<commit>)` lại đúng ba file và verify SHA hai chiều:
+  `ocr.sqlite=b442d2d0...03f0f7`, `coverage.json=54327f74...0453fb`,
+  `SHA256SUMS=8cd49270...a27ed`. Handoff phải pin commit này, không dùng `main/latest`.
+  Publish report nằm ngoài repo cạnh snapshot với hậu tố `.hf-publish-report.json`.
+
+### [28/08/2026] OCR pre-Gemini — audit logo/overlay tĩnh trên residual dev5
+
+- Audit CPU-only đọc artifact calibrated Gate B, không gọi model/Gemini và không sửa router
+  production. Policy `configs/ocr_low_information_overlay_audit_policy.json` chỉ xét overlay
+  ngắn lặp ổn định ở góc trên-phải; ticker/subtitle đáy màn hình được bảo vệ. Text/bbox gốc
+  luôn giữ nguyên, row chỉ được gắn cờ suppression candidate.
+- Trên dev5, residual giảm mô phỏng từ 5.886 region / 2.886 frame / 1.271 shot-request xuống
+  4.079 region / 1.957 frame / 1.023 shot-request; 1.807 region (30,70%) thuộc 31 nhóm
+  overlay góc trên-phải. Trong 98 nhãn calibration có 56 row thuộc residual, 26 row bị bộ
+  lọc gắn cờ và cả 26 đều là logo/đồng hồ kênh; không thấy semantic collision trong mẫu này.
+- Ngoại suy tuyến tính cho 293.336 keyframe là khoảng 287.348 residual region / 137.862
+  frame / 72.066 shot-request sau lọc. Đây **không phải exact production count** và không đủ
+  để tự mở Gemini: dev5 đều là nội dung HTV, nhãn calibration không phải holdout overlay đa
+  kênh. Report/artifact sinh tự động nằm ngoài repo; production vẫn phải chạy chín batch rồi
+  mới báo exact count/cost và xin người dùng duyệt Tầng 4.
+  Không commit/push Git.
+
+---
+
+### [28/08/2026] OCR snapshot tăng dần — batch/tier contract sẵn sàng
+
+- Thêm builder local CPU `scripts.build_ocr_incremental_snapshot`: nhận plan partition toàn
+  catalog, đọc JSONL độc lập của từng worker, reject overlap/foreign/duplicate UID rồi
+  atomic-build một SQLite. Bốn worker không bao giờ ghi chung SQLite.
+- `coverage.json` schema v2 ghi từng batch với tier
+  `craft_only|easyocr|vintern_calibrated|gemini_final`, complete/count/status/missing/pending,
+  timestamp, video list, assigned/observed UID SHA-256 và source checksum. `craft_only` chỉ
+  làm coverage, không vào FTS. Dev5 không thể trở thành batch thứ mười vì video partition
+  bắt buộc disjoint/exhaustive.
+- Snapshot vẫn luôn immutable, `complete=false`, `production_ready=false`; final SQLite chỉ
+  được build sau terminal union đủ chín batch. Không commit/push và chưa upload snapshot mới.
+
+### [28/08/2026] OCR production phase 1 — notebook CRAFT+EasyOCR sẵn sàng
+
+- Thêm notebook self-contained `scripts/kaggle_ocr_production_easyocr.ipynb`; bốn tài khoản
+  chỉ đổi `WORKER_SLOT`. Assignment cân theo frame: slot 1 = 01+09, slot 2 = 02+03+04,
+  slot 3 = 05+08, slot 4 = 06+07.
+- Notebook pin catalog/mapping và UID-set SHA từng batch, CRAFT/latin_g2 checksum, resume
+  JSONL theo UID, retry error ở lần chạy sau, tạo router-v2 Vintern candidate không kèm crop,
+  đóng archive không media và chỉ publish batch completion gate PASS. HF Dataset phải private;
+  archive được tải lại theo revision và verify SHA-256.
+- Phase này không gọi Vintern/Gemini, không ghi SQLite chung. Snapshot Online được build local
+  từ những batch EasyOCR đã pull bằng incremental snapshot builder. Notebook mới chỉ qua
+  static compile/contract test local; Kaggle production runtime chưa chạy. Không commit/push.
+
+### [28/08/2026] OCR production phase 2 — notebook Vintern FP16 sẵn sàng
+
+- Thêm notebook self-contained `scripts/kaggle_ocr_production_vintern.ipynb`, dùng lại đúng
+  bốn slot phase 1. Batch nào có archive EasyOCR hoàn chỉnh trên private HF Dataset thì có
+  thể chạy Vintern ngay; archive chưa có dừng rõ `WAIT_EASYOCR_ARCHIVE`.
+- Notebook pin official `5CD-AI/Vintern-1B-v3_5` FP16 revision
+  `b98f263eab246eb5269ade64edbdca8a887dc44d`, weight SHA-256 và Git blob OID của runtime;
+  chỉ xử lý router-v2 candidate, dựng crop tạm từ bbox + keyframe, resume theo
+  `candidate_id`, checkpoint 10.000 item và in progress 100 item.
+- Output raw per batch được exact-set validate, không chứa media, chỉ upload vào
+  `ocr/archives/{batch_id}/vintern/` khi `error=0`, rồi tải lại verify SHA-256. Manifest ghi
+  `calibrated=false`, `searchable=false`; không gọi Gemini, không build SQLite và chưa thay
+  EasyOCR text. Materialization calibrated vẫn là bước local sau khi pull cả hai layer.
+- Sửa lookup mount Kaggle của notebook phase 1 để nhận thêm depth
+  `*/*/*/keyframes-batch-*`, đúng cấu trúc Dataset thực người dùng vừa xác minh. Code mới chỉ
+  qua compile/contract tests local; Vintern production Kaggle chưa chạy. Không commit/push.
+
+### [28/08/2026] OCR pre-Gemini production gate + locked execution notebook
+
+- Thêm `scripts.prepare_ocr_gemini_production`: local CPU tự kéo đúng 9 cặp archive
+  EasyOCR/Vintern từ một private HF revision (hoặc nhận artifact root local), verify
+  source-chain/checksum/completion, áp calibration table emergency 98 đã pin rồi báo **exact**
+  residual region/frame/shot/request/contact-sheet. Không gọi Gemini.
+- Preflight xuất bundle không media gồm report, residual mapping và one-request-per-shot
+  manifest. Shot dày được chia nhiều contact-sheet image part trong cùng request. Cost chỉ là
+  planning estimate với giá official snapshot 28/08/2026; usage/token thật chờ paid canary.
+- Thêm notebook CPU-only `scripts/kaggle_ocr_production_gemini.ipynb`. Default
+  `EXECUTION_MODE=preflight`, hai cờ paid đều false và code không đọc API key. Canary tối đa
+  100 request cần exact report SHA + duyệt riêng; production cần thêm approved
+  `model_version`, request cap và VND cap `<=400.000`.
+- Runtime candidate là `gemini-2.5-flash-lite`, global MEDIUM, strict structured output exact
+  string `region_id`; Gemini không sở hữu bbox/UID. Có retry/backoff, actual usage ledger,
+  checkpoint/resume và per-batch HF round-trip verify. Model chỉ được coi pin runtime sau
+  canary HTTP 200/schema-valid một version. Chưa gọi API, chưa phát sinh chi phí, chưa có
+  exact production count vì 18 upstream archive chưa hoàn tất. Không commit/push.
+
+### [28/08/2026] OCR — bỏ Vintern khỏi critical-path barrier
+
+- Người dùng quyết định pre-Gemini không phải chờ Vintern. Nguồn bắt buộc còn đúng chín
+  archive EasyOCR; với từng batch, preflight tự dùng Vintern calibrated nếu archive hoàn
+  chỉnh có mặt, nếu thiếu thì đưa toàn bộ candidate router v2 thẳng sang Gemini và ghi
+  `vintern_status=not_available_bypassed_to_gemini`/`vintern_bypassed=true`.
+- EasyOCR text/confidence/bbox luôn được giữ làm fallback; không giả Vintern result hay
+  override. Report tách `completed_batches_used` và `bypassed_batches`, nên chi phí tăng do
+  bypass được nhìn thấy chính xác trước khi mở paid canary.
+- Gemini vẫn khóa như cũ: exact preflight report SHA → paid canary HTTP 200/schema-valid →
+  pin model version → người dùng duyệt request/VND cap. Thay đổi này chỉ bỏ barrier Vintern,
+  không tự gọi API và không tự phát sinh phí. Không commit/push.
+
+### [28/08/2026] OCR tạm bàn giao — EasyOCR production 9/9, chưa Vintern/Gemini
+
+- CRAFT+EasyOCR production đã hoàn thành và round-trip verify trên private HF Dataset cho đủ
+  chín batch, phủ đúng **293.336 keyframe**. Đây là tầng text hiện có để Nhánh 2 build
+  development snapshot và test `FtsSearcher`; `materialized_text_tier=easyocr`.
+- Pre-Gemini audit local đã verify đủ 9 archive EasyOCR, không có archive Vintern và không gọi
+  API. Exact residual khi bypass Vintern: **830.301 region / 253.177 frame / 92.768 shot và
+  request / 106.183 contact-sheet**. Report SHA-256:
+  `f48b490d74bc043ebf1e7c14c1ba51fcf02d773b0779ea7c269bf17efef8cb55`.
+- Estimate có reserve retry 15%: Standard khoảng **651.803 VND** (vượt trần 400.000 VND),
+  Batch khoảng **325.902 VND** (trong trần). Đây chỉ là planning estimate; **Gemini API chưa
+  được gọi, chưa phát sinh phí** và runner hiện tại là Standard nên không được mở full
+  production theo estimate Batch.
+- Vintern production chưa chạy. OCR tạm chốt ở EasyOCR để bàn giao song song; mọi SQLite
+  snapshot tạo từ nguồn này phải ghi `complete=false`, `production_ready=false`, tier
+  `easyocr`. OCR final còn thiếu Vintern/Gemini decision, terminal union và validation
+  `ocr.sqlite` cuối.
+
+---
+
+### [28/08/2026] OCR — thêm SQLite snapshot development, không đổi production pipeline
+
+- Theo quyết định người dùng, Nhánh 1 được bàn giao snapshot OCR bất biến để Nhánh 2 code/
+  test FTS/fusion song song. Gate A threshold → Gate B full dev5 → chín batch production
+  vẫn giữ nguyên; snapshot không phải đường tắt chất lượng.
+- Thêm builder CPU `scripts.build_ocr_snapshot`: validate catalog state + UID, atomic-build
+  đúng bảng `ocr_fts`, integrity/count/FTS probe, xuất thư mục version UTC + source hash với
+  `coverage.json` và `SHA256SUMS`. Snapshot luôn `complete=false`,
+  `production_ready=false`, `online_development_only` và không ghi đè thế hệ cũ.
+- Coverage theo từng video ghi expected/observed/success/no_text/error/missing, engine count,
+  text tier và Vintern required/completed/accepted/residual/pending. Adapter Gate 2 chỉ nạp
+  text/confidence EasyOCR; kết quả Vintern hiện chỉ làm coverage evidence vì chưa có
+  confidence calibrate để materialize đúng contract.
+- Snapshot dev thật đã build ngoài repo:
+  `ocr-snapshot-20260827T195734Z-85dd095d6ba9`, 4.164 FTS row/5 video,
+  1,4195% catalog, SQLite SHA-256
+  `b442d2d0a75bf3d004caa84e4d607d0a06fa70f7936b895d3b946ea15d03f0f7`. V001/V002/
+  V003/V005 có Vintern v2 coverage xong nhưng còn residual; V006 partial, còn 3.007 region.
+  Text trong SQLite vẫn được đánh dấu rõ `easyocr_only`; snapshot là child của lần build
+  thử đầu và là bản handoff local mới nhất.
+- Namespace HF được khóa riêng `ocr/snapshots/{snapshot_id}/...` trong cùng Dataset. Snapshot
+  dev này đã upload và round-trip verify tại commit `15f2f3bed29a9f89683b01ba24b30578849b20bd`.
+  Đây vẫn là snapshot partial/easyocr-only, không làm production pipeline READY. Không
+  commit/push Git.
+
+---
+
+### [28/08/2026] OCR — chốt môi trường Tầng 1–4 và luồng HF Dataset
+
+- Kiến trúc được người dùng chốt lại: CRAFT toàn catalog → EasyOCR mọi region → Vintern
+  FP16 official/router v2 → Gemini residual/arbiter. Gemini 2.5 chỉ được canary/call sau khi
+  Tầng 1–3 báo exact residual region, unique `keyframe_uid`, unique shot/request, token và
+  chi phí; hiện chưa đổi runtime pin và chưa phát sinh API cost.
+- Máy Codex hiện tại không GPU chỉ orchestration/code/validate artifact. Tầng 1–3 chỉ chạy
+  Kaggle GPU, chia chín batch UID-disjoint trên tối đa bốn tài khoản OCR. RTX 4050 máy thi
+  chỉ chạy Online, đọc `ocr.sqlite` build sẵn và không chạy model OCR.
+- Timing thật từ dev-subset-5: CRAFT+EasyOCR xử lý 4.164 frame/41.212 region trong
+  1.351,592 giây, 3,081 frame/s trên một T4. Ngoại suy thô 293.336 frame là 26,45 giờ/T4;
+  bốn worker lý tưởng 6,61 giờ, cộng buffer 25% là 8,27 giờ. Cả 4.164 frame đều bị CRAFT
+  đánh dấu `text_detected`, nên đây là ETA bảo thủ và là dấu hiệu cần audit false-positive,
+  không phải tỷ lệ text đại diện toàn catalog.
+- Artifact Tầng 1–3 bắt buộc đi qua đúng HF Dataset chung: Kaggle push archive/checksum/
+  manifest dưới `ocr/archives/{batch_id}/`, verify remote, local `snapshot_download()` rồi
+  mới union và build một `ocr.sqlite`. Worker production, HF upload/verify, local pull/merge
+  và SQLite builder hiện chưa hoàn tất; pipeline vẫn **NOT READY**, không `complete=true`.
+- Envelope đã có mode mới `craft_easyocr_vintern_gemini` và engine Vintern, giữ mode cũ chỉ
+  để đọc evidence. Không đổi `shared/schemas/ocr.py::OcrResult`, `ocr_fts`, `online/` hoặc `app/`.
+  Không commit/push.
+
+---
+
+### [28/08/2026] OCR Gate 2 — router v2 dev-only PASS, production vẫn đóng
+
+- Checkpoint recovery được xác minh lại đúng SHA-256: EasyOCR 4.164 frame, 41.212 region;
+  Vintern 27.927 result, không duplicate/foreign ID. Review bundle có 250 crop, cân bằng
+  50 mẫu/video và 50 mẫu/category; đánh giá trực quan có hỗ trợ AI, không được ghi là human
+  ground truth.
+- Router seed cũ FAIL vì `mixed_frame` đẩy 34.335/41.212 region (83,31%) sang Vintern,
+  ngoại suy khoảng 2,42 triệu crop / 210,6 giờ single T4. Không cần chạy nốt 6.408 candidate
+  của checkpoint cũ.
+- Thêm router v2 dev-only theo từng region: hard threshold `<0,40`; dải `0,40–0,60` chỉ
+  xét mixed/glyph bất thường của chính region, không propagation toàn frame. Kết quả thật:
+  14.807/41.212 candidate (35,93%), giảm 19.528 candidate / 56,87%; cả năm video đều dưới
+  trần audit 40%.
+- Trong 11.800 candidate v2 đã có kết quả Vintern, output guard giữ 11.659 success và chặn
+  141 output qua tổng 153 reason rỗng, giải thích/prompt leak hoặc phình độ dài. Ngoại suy
+  còn khoảng 1,043 triệu crop / 90,8 giờ single T4, chưa gồm
+  EasyOCR/I/O/retry/Gemini; production chưa được phép mở chỉ từ số này.
+- `PASS_ROUTER_V2_DEV_ONLY` chỉ cho phép bước kế tiếp là pilot end-to-end nhỏ có guard và
+  đo temporal reuse/static-overlay. Gate 2 accuracy vẫn chưa PASS do thiếu human ground
+  truth; không sửa production contract, `shared/schemas`, `online/` hoặc `app/`.
+- Artifact audit/candidate JSONL được sinh ngoài repo. Chưa commit/push.
+
+---
+
+### [27/08/2026] OCR Gate 2 — Vintern runtime PASS, dev-subset-5 harness chờ chạy
+
+- Official `5CD-AI/Vintern-1B-v3_5` revision
+  `b98f263eab246eb5269ade64edbdca8a887dc44d` đã verify weight SHA-256
+  `296a16a6bf28e6d3f0fb9298deba70b3cfa1d7519f4aa326e2f862bf2e63be05` và sáu remote-code
+  Git OID. FP16 trên một T4 chạy 300/300 crop không lỗi/OOM; `max_num=1` P50 0,371 s,
+  P95 0,662 s, peak reserved 2.508 MiB. Artifact benchmark local SHA-256
+  `68edc4a6bee12f0413e44f934c807a69b4665a84937666af12992e51ea589118`; manifest 100 crop
+  SHA-256 `6203c79d11e5a05c0b9d9deb89dd18f4b45c8e6f664835e40ad7a66a5038ff67`.
+- Benchmark trên chỉ lấy 35 frame của `L21_V001`, nên PASS provenance/runtime nhưng chưa PASS
+  accuracy. Người dùng chưa cho phép tích hợp Vintern vào production contract/code.
+- Đã tạo dev-only `scripts/kaggle_ocr_gate2_dev5.ipynb`: chạy đúng 4.164 keyframe của năm
+  video `L21_V001/V002/V003/V005/V006`, đối chiếu count + SHA-256 tập UID từ catalog thật,
+  tách CRAFT detect/EasyOCR recognize, reload + resume JSONL, chạy Vintern cho toàn bộ seed
+  escalation, xuất threshold sweep/ETA và 250 review row gồm CRAFT `no_text` control. Notebook
+  không gọi Gemini; kết quả không lỗi vẫn là `PENDING_MANUAL_ACCURACY` cho tới khi review có
+  ground truth. Notebook đã JSON-parse và compile tĩnh 8/8 code cell; chưa chạy dev5 thật.
+- Không commit/push, không sửa `online/`, `backend/app`, `shared/schemas` hoặc production OCR
+  envelope trong vòng này.
+
+---
+
+### [27/08/2026] OCR Gate 1 — chốt CRAFT-gated Gemini, final canary còn pending
+
+- Người dùng đã làm rõ `BASELINE_SPEC.md` bản 12: CRAFT detect vùng chữ trên toàn bộ 293.336
+  keyframe; frame không region terminal `no_text`, frame có region được crop/phóng và gom
+  Begin/Middle/End thành một contact-sheet request/shot cho Gemini recognition. `latin_g2`
+  chỉ nhận overflow/cloud stop. Paid cap vẫn là min(20.000 frame, 400.000 VND theo token
+  ledger có reserve 15%).
+- AI Studio của đúng project Free `gen-lang-client-0009440353` hiển thị
+  `gemini-3.1-flash-lite` 15 RPM/250K input TPM/500 RPD (usage snapshot 3/15,
+  6,96K/250K, 8/500); model 3.5 cùng trần và đã hết ngày ở 505/500 RPD. Model 2.5 vẫn 404
+  với user mới; candidate escalation pin 3.1, không alias `latest`.
+- Canary 3.1 crop-sheet cũ giữ bbox từ detector local: 10/10 synthetic shot request PASS,
+  strict schema 100%, synthetic line recall 90/90, trung bình 1.250 input + 257,4 output
+  token/shot, latency min/max 1.984/6.114 ms. Summary local SHA-256
+  `97944101f2eaec1533b6cfc8c59d4cae1934f17224821d6af2955f6e745d7fab`; bị supersede vì
+  chưa trả exact `region_id` và chưa dùng `MEDIA_RESOLUTION_MEDIUM`. Final canary chưa chạy
+  lại vì `GEMINI_API_KEY` hiện không có trong process/User scope của shell Codex.
+- Envelope production đổi sang `craft_gated_gemini`, attempt tách detection/recognition.
+  Router schema v2 gom shot, chỉ reuse một frame khi embedding + CRAFT layout + crop SSIM +
+  pHash cùng pass; embedding đơn độc không gate `no_text`. Gemini response không sinh bbox/
+  UID, adapter map `region_id` về ba `keyframe_uid` và bbox CRAFT.
+- Gate 2 vẫn đóng vì catalog local recover không có JPEG. Cần đúng dev-subset-5 để benchmark
+  CRAFT/`latin_g2` throughput/recall, routing rate, MEDIUM-vs-HIGH, interrupt→resume và token
+  cost ảnh thật trước production. Verification local: 126/126 unit test, compileall và
+  `git diff --check` PASS. Không có commit/push mới trong vòng thay đổi này.
 
 ---
 

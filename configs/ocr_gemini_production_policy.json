@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "model_candidate": "gemini-2.5-flash-lite",
+  "model_requires_paid_canary_http_200": true,
+  "media_resolution": "MEDIA_RESOLUTION_MEDIUM",
+  "max_regions_per_contact_sheet": 18,
+  "max_budget_vnd": 400000,
+  "retry_reserve_fraction": 0.15,
+  "usd_to_vnd": 26300,
+  "pricing_snapshot_date": "2026-08-28",
+  "standard_input_usd_per_million_tokens": 0.1,
+  "standard_output_usd_per_million_tokens": 0.4,
+  "batch_input_usd_per_million_tokens": 0.05,
+  "batch_output_usd_per_million_tokens": 0.2,
+  "gemini_2_5_medium_image_tokens": 256,
+  "planning_prompt_tokens_per_request": 160,
+  "planning_prompt_tokens_per_region": 8,
+  "planning_output_tokens_per_request": 20,
+  "planning_output_tokens_per_region": 48
+}

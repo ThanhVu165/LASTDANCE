@@ -21,8 +21,8 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
    chạy CLIP/SigLIP độc lập trên Kaggle và test checkpoint/resume thật.
 9. [`docs/FAISS_INDEX_RUNBOOK.md`](docs/FAISS_INDEX_RUNBOOK.md) - build/add/validate từng
    `IndexIDMap` độc lập trên CPU local sau khi embedding batch hoàn tất.
-10. [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md) - Gate 1 catalog/quota, EasyOCR offline
-    checksum preflight, JSONL envelope/resume và merge SQLite cuối.
+10. [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md) - OCR phân tầng CRAFT → EasyOCR → Vintern
+    → Gemini residual, snapshot SQLite development, JSONL resume và đồng bộ HF Dataset.
 
 Các tài liệu window-first cũ được giữ lại làm lịch sử, không còn là runtime instruction.
 
@@ -75,6 +75,12 @@ trong lúc xử lý video. Batch runner có checkpoint/resume riêng theo từng
 trạng thái sau khi manifest đã atomic-publish rồi validate lại. CLIP/SigLIP đã qua dev gate
 Kaggle T4; EVA-CLIP phải qua dev-subset interrupt/resume/validate trước production. OCR GPU
 chưa chạy trong lát cắt này.
+
+OCR offline có contract CRAFT → EasyOCR mọi region → Vintern chỉ cho router v2 candidate,
+với confidence Vintern calibrate từ ground-truth trước khi được quyền override EasyOCR.
+Snapshot SQLite development được version/checksum và đồng bộ qua private HF Dataset bằng
+`scripts.publish_ocr_snapshot_hf`; xem [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md). Không
+commit snapshot/JSONL vào Git và không coi snapshot partial là production-ready.
 
 ## Invariant quan trọng
 

@@ -1,0 +1,7 @@
+# OCR Tầng 1–2: CRAFT detector + EasyOCR recognizer. Vintern uses the separately
+# pinned runtime/checkpoint in configs/ocr_vintern_gate2_policy.json. Keep the CUDA-matched
+# Torch/Torchvision supplied by Kaggle;
+# record their versions before and after installation and fail if pip replaces them.
+-r ocr-api.txt
+
+easyocr==1.7.2

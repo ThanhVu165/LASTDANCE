@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "sample_frames": 100,
+  "video_ids": ["L21_V001", "L21_V002", "L21_V003", "L21_V005", "L21_V006"],
+  "frames_per_video": null,
+  "sample_video_counts": {
+    "L21_V001": 60,
+    "L21_V002": 40,
+    "L21_V003": 0,
+    "L21_V005": 0,
+    "L21_V006": 0
+  },
+  "sample_uid_set_sha256": "4544608e596f9bb80d8356017ba2f5e5242717695a378566401b57d4dbb9a778",
+  "allow_current_fallback_for_gate_b": true,
+  "evidence_limitations": [
+    "Emergency single-annotator review uses the already labeled first 100 deterministic Gate A rows: 60 L21_V001 and 40 L21_V002.",
+    "All 100 labeled frames contain text, so no-text false-positive rate is unavailable.",
+    "This deadline override may retain recall_current for full-dev Gate B but is not a balanced five-video threshold PASS."
+  ],
+  "min_region_recall": 0.98,
+  "min_text_frame_recall": 0.99,
+  "configs": [
+    {
+      "config_id": "recall_current",
+      "text_threshold": 0.6,
+      "low_text": 0.3,
+      "link_threshold": 0.3
+    },
+    {
+      "config_id": "balanced",
+      "text_threshold": 0.7,
+      "low_text": 0.4,
+      "link_threshold": 0.4
+    },
+    {
+      "config_id": "strict",
+      "text_threshold": 0.8,
+      "low_text": 0.5,
+      "link_threshold": 0.5
+    }
+  ]
+}
