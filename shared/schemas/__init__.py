@@ -4,12 +4,15 @@ from .asr import AsrSegment
 from .frame import FrameRecord
 from .ocr import OcrResult
 from .online import (
+    AnswerTarget,
     ArtifactAvailability,
     ArtifactStatus,
     FrameEvidence,
     KISCandidate,
     QACandidate,
+    QueryRole,
     QuerySpec,
+    QueryUnit,
     SearchRequest,
     SearchRun,
     TaskCandidate,
@@ -20,6 +23,7 @@ from .online import (
 )
 
 __all__ = [
+    "AnswerTarget",
     "ArtifactAvailability",
     "ArtifactStatus",
     "AsrSegment",
@@ -28,7 +32,9 @@ __all__ = [
     "KISCandidate",
     "OcrResult",
     "QACandidate",
+    "QueryRole",
     "QuerySpec",
+    "QueryUnit",
     "SearchRequest",
     "SearchRun",
     "TaskCandidate",

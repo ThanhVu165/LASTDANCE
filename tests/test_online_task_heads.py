@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from online.config import OnlineConfig
 from online.ranking import apply_clip_tie_break, rank_videos
 from online.engine import merge_kis_anchor_frames
-from online.task_heads import build_kis_candidates, build_trake_candidates
+from online.task_heads import build_kis_candidates, build_qa_candidates, build_trake_candidates
 from online.retrieval import RetrievalResult
 from shared.schemas.online import FrameEvidence, UnifiedQueryPlan, VideoHypothesis
 
@@ -151,7 +151,7 @@ class OnlineTaskHeadTests(unittest.TestCase):
         secondary_frames = [item.frame_id for item in result if item.video_id == "v2"]
         self.assertEqual(secondary_frames[:2], [6480, 6471])
 
-    def test_video_ranking_uses_scene_labels_not_global_query_labels(self):
+    def test_video_ranking_reports_target_labels_not_locator_or_global_labels(self):
         first = frame("v1", 1, 1.0, 0.9, "s1")
         second = frame("v2", 2, 1.0, 0.8, "s1")
         registry = SimpleNamespace(
@@ -180,8 +180,48 @@ class OnlineTaskHeadTests(unittest.TestCase):
         )
         ranked = rank_videos(result, plan, registry, OnlineConfig())
         self.assertEqual(ranked[0].video_id, "v1")
-        self.assertEqual(ranked[0].matched_scenes, ["map scene", "door scene"])
+        self.assertEqual(ranked[0].matched_scenes, ["door scene"])
         self.assertNotIn("global", ranked[0].matched_scenes)
+
+    def test_qa_attempts_top_three_below_locator_threshold_without_uncertain_rows(self):
+        class Answerer:
+            def __init__(self):
+                self.calls = []
+
+            def answer(self, *, video_id, frames, question):
+                self.calls.append(video_id)
+                return "42", 0.9, []
+
+        hypotheses = [
+            VideoHypothesis(
+                video_id=f"v{index}",
+                video_score=0.2,
+                coverage=0.2,
+                model_consensus=0.2,
+                best_frames=[frame(f"v{index}", index, float(index), 0.2, f"s{index}")],
+            )
+            for index in range(1, 5)
+        ]
+        plan = UnifiedQueryPlan(
+            raw_query="Con số là bao nhiêu?",
+            caption_en="What number is visible?",
+            retrieval_queries=["visible number"],
+            scenes=["visible number"],
+            question="Con số là bao nhiêu?",
+            answer_source="visible_text",
+        )
+        answerer = Answerer()
+        candidates, _warnings = build_qa_candidates(
+            hypotheses,
+            plan,
+            answerer=answerer,
+            max_results=100,
+            config=OnlineConfig(),
+        )
+        self.assertEqual(answerer.calls, ["v1", "v2", "v3"])
+        self.assertTrue(candidates)
+        self.assertTrue(all(item.answer == "42" for item in candidates))
+        self.assertTrue(all(item.requires_review for item in candidates))
 
     def test_trake_beam_enforces_same_video_and_increasing_time(self):
         first = RetrievalResult(

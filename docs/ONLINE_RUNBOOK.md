@@ -7,12 +7,14 @@ theo baseline.
 ## 1. Phạm vi và contract
 
 Online chạy local, nhận `SearchRequest(task_type, raw_query, query_spec, max_results<=100,
-mode="accurate")` và trả `SearchRun`. `QuerySpec` giữ đúng tên file query, task và số
+mode="accurate")` cùng optional `UnifiedQueryPlan` đã duyệt và trả `SearchRun`.
+`OnlineEngine.plan(QuerySpec)` chỉ phân tích query, chưa chạy FAISS. `QuerySpec` giữ đúng tên file query, task và số
 event TRAKE. Pipeline tìm frame theo `keyframe_uid`, tổng hợp bằng
 chứng theo shot/video rồi mới tạo KIS, QA hoặc TRAKE candidate. Submission chỉ chứa
 `video_id` và `frame_id`; tuyệt đối không xuất `local_idx` hoặc FAISS internal position.
-`caption_en` luôn là faithful query đầu tiên được search; các query expansion/scene chỉ bổ
-sung evidence và không được thay thế caption đầy đủ.
+`global_context_en` luôn là faithful query đầu tiên. Planner gắn đa vai trò
+`VIDEO_LOCATOR`, `TARGET_MOMENT`, `ANSWER_EVIDENCE`, `ORDERED_EVENT`; cùng clue được phép
+mang nhiều role. Schema `scenes/anchor_moment_index` cũ chỉ còn adapter migration.
 
 Không có FastAPI trong critical path. Streamlit gọi trực tiếp `OnlineEngine` để giảm lớp
 trung gian trong timebox vòng sơ tuyển.
@@ -126,6 +128,7 @@ $env:AIC_QWEN_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 $env:AIC_QWEN_REVISION = "89644892e4d85e24eaac8bacfd4f463576704203"
 $env:AIC_TORCH_WORKER = "1"              # default Windows; không tắt với pip FAISS/Torch
 $env:AIC_QWEN_MAX_PIXELS = "200704"
+$env:AIC_QWEN_PLANNER_MAX_NEW_TOKENS = "1280"
 $env:AIC_QWEN_VQA_MAX_NEW_TOKENS = "64"
 $env:AIC_GEMINI_SAFE_RPM = "14"
 $env:AIC_GEMINI_SAFE_TPM = "225000"
@@ -180,27 +183,40 @@ Trình tự operator:
 
 1. upload ZIP query chính thức; UI đọc trực tiếp các file `.txt` ở ZIP root, không extract;
 2. chọn query; task và `expected_event_count` của TRAKE lấy từ tên/nội dung đề;
-3. xem tab `Top 100` đúng submission rank hoặc tab `Theo video` để review evidence;
+3. bấm `Phân tích truy vấn`, kiểm tra/sửa global English context, từng QueryUnit, nhiều role,
+   modality, known literal, target/evidence ID và thứ tự event; UI chặn plan thiếu invariant;
+4. bấm `Chạy retrieval với plan đã duyệt`, sau đó xem `Top 100` đúng submission rank hoặc
+   tab `Theo video` để review evidence;
    với KIS, năm dòng đầu là seed đa video và phần còn lại được weighted round-robin; khi tiến
-   độ quota bằng nhau, frame có `final_score` cao hơn đi trước. Anchor chỉ boost/merge
-   evidence, không thay tập frame đã tìm được từ toàn query. Video ranking dedup một
-   evidence/shot, còn candidate KIS giữ tối đa ba frame/shot; chỉ ba lựa chọn đầu của video
-   đứng #1 bắt buộc ưu tiên khác shot, video còn lại giữ score order trong quota;
-4. sửa `frame_id`/QA answer khi cần; nút exact-frame dùng FFmpeg
+   độ quota bằng nhau, frame có `final_score` cao hơn đi trước. Video ranking dùng locator +
+   target nhưng candidate frame chỉ lấy từ target retrieval, không hard-dedup cùng shot;
+5. sửa `frame_id`/QA answer khi cần; QA `requires_review` chỉ được hạ khi operator chọn thủ
+   công; nút exact-frame dùng FFmpeg
    `select=eq(n,frame_id)` và không suy từ FPS trung bình;
-5. tick candidate riêng hoặc bấm bulk-add task-aware; nếu draft đã có dữ liệu, chọn replace
+6. tick candidate riêng hoặc bấm bulk-add task-aware; nếu draft đã có dữ liệu, chọn replace
    hoặc merge-fill, không có ghi đè âm thầm;
-6. reorder/xóa trong draft độc lập của từng query;
-7. tải CSV hiện tại chỉ để inspection; bấm validate toàn gói để sinh ZIP nộp chính thức.
+7. reorder/xóa trong draft độc lập của từng query;
+8. tải CSV hiện tại chỉ để inspection; bấm validate toàn gói để sinh ZIP nộp chính thức.
 
 Search result không bao giờ tự đi vào draft. Core không cần UI có thể gọi:
 
 ```python
 from online import OnlineEngine
-from shared.schemas.online import SearchRequest, TaskType
+from shared.schemas.online import QuerySpec, SearchRequest, TaskType
 
 engine = OnlineEngine.from_environment()
-run = engine.search(SearchRequest(task_type=TaskType.KIS, raw_query="..."))
+spec = QuerySpec(
+    query_name="query-manual-kis",
+    source_filename="query-manual-kis.txt",
+    task_type=TaskType.KIS,
+    raw_query="...",
+)
+plan = engine.plan(spec)
+# Có thể sửa/validate plan tại đây trước khi chạy retrieval.
+run = engine.search(
+    SearchRequest(task_type=TaskType.KIS, raw_query=spec.raw_query, query_spec=spec),
+    query_plan=plan,
+)
 ```
 
 CLI search chỉ dùng cho audit JSON:
@@ -226,8 +242,11 @@ các MATCH expression khác nhau. Quy tắc này ngăn một token phổ biến 
 Top K trước clue hiếm như “mazut”.
 
 Qwen VQA mặc định tắt. Planner và VQA dùng cùng model trong Torch worker, không nạp hai bản.
-Khi locator dưới 0,85 hoặc VQA không đồng thuận, candidate giữ
-`answer="Uncertain"` để operator sửa. Không coi `Uncertain` là đáp án đã xác minh.
+QA luôn thử answerer trên Top 3 video evidence. Locator dưới 0,85 không chặn answer attempt,
+chỉ đặt `requires_review=true`. Unknown OCR/ASR được đọc theo frame UID + neighbor; nếu thấp
+confidence tiếp tục sang Gemini/Qwen. `Uncertain` chỉ là warning/trạng thái review, không tạo
+QACandidate và không được export. Answer thật còn `requires_review=true` cũng bị workspace
+chặn cho tới khi operator xác minh.
 
 Nếu Windows báo `OMP Error #15`, cấu hình đang chạy Torch trực tiếp trong process FAISS:
 đặt lại `AIC_TORCH_WORKER=1` và restart process. Không dùng biến bỏ qua duplicate OpenMP.

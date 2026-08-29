@@ -85,27 +85,34 @@ snapshot ID, tier, coverage, error/missing và `production_ready=false`.
 - Startup ArtifactRegistry fail-closed cho catalog, ba FAISS và optional OCR/ASR.
 - Planner chain Gemini 3.5 Flash-Lite → Qwen local → rule fallback; visual query model phải
   là tiếng Anh, query gốc giữ để audit.
-- `caption_en`, global expansions, scene/must/should được search độc lập; không mean-pool.
+- Planner contract role-aware đa vai trò: `VIDEO_LOCATOR`, `TARGET_MOMENT`,
+  `ANSWER_EVIDENCE`, `ORDERED_EVENT`. Streamlit chạy hai pha Analyze → operator edit/review →
+  Search; Gemini dùng structured response schema, Qwen/rule qua cùng validator.
+- `global_context_en`, global expansions và từng QueryUnit được search độc lập; không mean-pool.
 - SigLIP + EVA Top 1.000/query, union UID, SRRF `eta=60`, `beta=40`; CLIP chỉ comparison,
   tie-break hoặc explicit rollback.
 - OCR/ASR intent-aware, missing channel renormalize. OCR cascade exact → AND → prefix pool
   5.000 với token-coverage → fuzzy candidate hẹp.
 - Temporal-neighbor boost-only; frame evidence dedup theo shot khi rank video.
-- Video score: coverage 0,40 + mean scene 0,25 + weakest scene 0,15 + global 0,10 +
-  consensus 0,10; giữ Top 12 (TRAKE Top 20).
+- Video score tách locator 0,35 + target/event 0,45 + global 0,10 + consensus 0,10; giữ Top
+  12 (TRAKE Top 20), sau đó target/evidence retrieval riêng quyết định frame.
 - VLM verification Top 4 video bằng Gemini → Qwen fallback; partial VLM output không phạt
   frame bị bỏ qua.
-- KIS anchor merge/boost-only và Top 100 weighted round-robin đa video.
-- QA locator >0,85, OCR/ASR answer theo intent hoặc Gemini/Qwen visual answer; operator phải
-  sửa `Uncertain` trước export.
-- TRAKE search từng event, beam width 8, cùng video, timestamp tăng, decay mặc định 0.
-- UI có `Top 100` và `Theo video`, exact-frame decode, atomic bulk-add, draft theo query.
+- KIS chỉ rank submission frame bằng `submission_target_ids`; locator-only frame không chiếm
+  Top 100, candidate không hard-dedup cùng shot và vẫn weighted round-robin đa video.
+- QA luôn thử Top 3; locator 0,85 chỉ auto-accept. Unknown OCR/ASR đọc evidence UID + neighbor,
+  confidence thấp fallback VLM; không sinh portfolio `Uncertain`, `requires_review` chặn export.
+- TRAKE locator chạy riêng; chỉ `ordered_event_ids` đi vào beam width 8, cùng video, timestamp
+  tăng, decay mặc định 0.
+- UI có query-plan editor, `Top 100` và `Theo video`, exact-frame decode, atomic bulk-add,
+  draft theo query.
 - Export profile duy nhất `AIC26_QUALIFIER_OFFICIAL`; ZIP chỉ chứa `submission/*.csv`.
 
 ## Validation đã chạy
 
-- Full Online regression **51/51 test PASS**: planner, SRRF/fusion, retrieval/CLIP rollback,
-  video/task heads, VLM partial-output behavior, Torch worker, official CSV/ZIP và OCR FTS.
+- Full Online regression **55/55 test PASS**; toàn repo **242/242 test PASS**: role-aware
+  planner, SRRF/fusion, retrieval/CLIP rollback, video/task heads, OCR UID-neighbor answer,
+  VLM partial-output behavior, Torch worker và official CSV/ZIP.
 - Deep preflight PASS: hash/state/structure/full UID diff của ba FAISS và checksum/catalog/
   FTS5/integrity/UID join của OCR snapshot đều hợp lệ.
 - Probe thật `giá dầu mazut` sau prefix token-coverage đưa `L22_V029` lên Top 1 và các bảng

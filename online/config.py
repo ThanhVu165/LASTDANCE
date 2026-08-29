@@ -26,11 +26,15 @@ class OnlineConfig:
     video_part_top_k: int = 50
     video_frame_evidence_k: int = 3
     video_evidence_max_weight: float = 0.7
-    video_coverage_weight: float = 0.40
-    video_evidence_weight: float = 0.25
-    video_weakest_weight: float = 0.15
+    video_locator_weight: float = 0.35
+    video_target_weight: float = 0.45
     video_global_weight: float = 0.10
     video_consensus_weight: float = 0.10
+    trake_locator_weight: float = 0.15
+    trake_event_coverage_weight: float = 0.45
+    trake_weakest_weight: float = 0.20
+    trake_mean_weight: float = 0.10
+    trake_consensus_weight: float = 0.10
     verified_base_weight: float = 0.70
     verified_must_weight: float = 0.20
     verified_should_weight: float = 0.10
@@ -45,7 +49,7 @@ class OnlineConfig:
     trake_beam_width: int = 8
     trake_decay: float = 0.0
     qa_similarity_threshold: float = 0.85
-    qa_answer_video_top_k: int = 1
+    qa_answer_video_top_k: int = 3
     portfolio_max_per_video: int = 40
     portfolio_primary_min: int = 30
     clip_tie_margin: float = 0.02
@@ -72,14 +76,22 @@ class OnlineConfig:
         if any(value <= 0 for value in positive.values()):
             raise ValueError(f"online integer config values must be positive: {positive}")
         weights = (
-            self.video_coverage_weight
-            + self.video_evidence_weight
-            + self.video_weakest_weight
+            self.video_locator_weight
+            + self.video_target_weight
             + self.video_global_weight
             + self.video_consensus_weight
         )
         if abs(weights - 1.0) > 1e-9:
             raise ValueError("video ranking weights must sum to 1")
+        trake_weights = (
+            self.trake_locator_weight
+            + self.trake_event_coverage_weight
+            + self.trake_weakest_weight
+            + self.trake_mean_weight
+            + self.trake_consensus_weight
+        )
+        if abs(trake_weights - 1.0) > 1e-9:
+            raise ValueError("TRAKE video ranking weights must sum to 1")
         verified_weights = (
             self.verified_base_weight + self.verified_must_weight + self.verified_should_weight
         )
@@ -104,8 +116,8 @@ class OnlineConfig:
     def load(cls, path: Path | None = None) -> "OnlineConfig":
         source = path or Path(__file__).resolve().parents[1] / "configs" / "online_baseline.json"
         raw = json.loads(source.read_text(encoding="utf-8"))
-        if raw.get("schema_version") != 2:
-            raise RuntimeError("online config schema_version must be 2")
+        if raw.get("schema_version") != 3:
+            raise RuntimeError("online config schema_version must be 3")
         allowed = {item.name for item in fields(cls)}
         values = {key: value for key, value in raw.items() if key in allowed}
         return cls(**values)

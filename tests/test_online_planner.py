@@ -11,7 +11,7 @@ from online.planners import (
     _validate_provider_plan,
     get_query_planner,
 )
-from shared.schemas.online import SearchRequest, TaskType
+from shared.schemas.online import QueryRole, SearchRequest, TaskType
 
 
 class OnlinePlannerTests(unittest.TestCase):
@@ -43,7 +43,13 @@ class OnlinePlannerTests(unittest.TestCase):
         query = "Một con cá được đặt lên cân. Con số hiển thị cuối cùng trên cân là bao nhiêu?"
         plan = self.planner.plan(query, TaskType.QA)
         self.assertEqual(plan.answer_source, "visible_text")
-        self.assertIn("ocr", plan.modality_weights)
+        self.assertEqual(plan.visible_text, [])
+        self.assertEqual(plan.modality_weights, {"visual": 1.0})
+        self.assertEqual(plan.answer_target.source, "ocr")
+        self.assertEqual(plan.answer_target.value_type, "number")
+        evidence = plan.units_by_id(plan.answer_target.evidence_unit_ids)[0]
+        self.assertIn(QueryRole.ANSWER_EVIDENCE, evidence.roles)
+        self.assertIn("ocr", evidence.modalities)
 
     def test_displayed_fuel_price_uses_discriminative_literal_ocr_term(self):
         query = "Có thông tin về giá dầu mazut được hiển thị trong khung hình."
@@ -144,9 +150,78 @@ class OnlinePlannerTests(unittest.TestCase):
             "qwen-local",
             TaskType.QA,
         )
-        self.assertEqual(plan.visible_text, [raw])
+        self.assertEqual(plan.visible_text, [])
         self.assertEqual(plan.answer_source, "visible_text")
-        self.assertEqual(plan.modality_weights, {"visual": 0.55, "ocr": 0.45})
+        self.assertEqual(plan.modality_weights, {"visual": 1.0})
+        self.assertEqual(plan.answer_target.source, "ocr")
+
+    def test_self_driving_car_qa_separates_locator_from_unknown_number(self):
+        raw = (
+            "Đoạn clip được quay từ bên trong một chiếc xe ô tô tự lái, có thể thấy rõ vô lăng "
+            "được xoay để chiếc xe rẽ sang phải. Sau đó, góc quay chuyển ra ngoài, bắt trọn cảnh "
+            "chiếc xe màu trắng rẽ trái, và ở góc trên khung hình có một biển hiệu đỏ gồm 6 ký tự "
+            "chữ Hán. Con số được viết trên phần hông xe màu trắng là số mấy?"
+        )
+        plan = _validate_provider_plan(
+            raw,
+            {
+                "global_context_en": "A self-driving car is shown from inside and outside.",
+                "retrieval_queries": ["self-driving white car turning near a red Chinese sign"],
+                "query_units": [
+                    {
+                        "unit_id": "inside",
+                        "description_original": "Đoạn clip được quay từ bên trong một chiếc xe ô tô tự lái, có thể thấy rõ vô lăng được xoay để chiếc xe rẽ sang phải",
+                        "retrieval_query_en": "inside a self-driving car with the steering wheel turning right",
+                        "roles": ["VIDEO_LOCATOR"],
+                    },
+                    {
+                        "unit_id": "outside",
+                        "description_original": "chiếc xe màu trắng rẽ trái, và ở góc trên khung hình có một biển hiệu đỏ gồm 6 ký tự chữ Hán",
+                        "retrieval_query_en": "a white car turns left below a red sign with six Chinese characters",
+                        "roles": ["VIDEO_LOCATOR"],
+                        "modalities": ["visual", "ocr"],
+                        "visual_text_attributes": ["6 ký tự chữ Hán"],
+                    },
+                    {
+                        "unit_id": "number",
+                        "description_original": "Con số được viết trên phần hông xe màu trắng là số mấy?",
+                        "retrieval_query_en": "the number written on the side of the white car",
+                        "roles": ["VIDEO_LOCATOR", "TARGET_MOMENT", "ANSWER_EVIDENCE"],
+                        "modalities": ["visual", "ocr"],
+                        "known_text_literals": ["6 ký tự chữ Hán"],
+                    },
+                ],
+                "submission_target_ids": ["number"],
+                "answer_target": {
+                    "question": "What number is on the car?",
+                    "value_type": "number",
+                    "source": "ocr",
+                    "evidence_unit_ids": ["number"],
+                    "value_is_unknown": True,
+                },
+                "negative_constraints": ["no people"],
+            },
+            "qwen-local",
+            TaskType.QA,
+        )
+        self.assertEqual(plan.visible_text, [])
+        self.assertEqual(plan.answer_target.value_type, "number")
+        self.assertEqual(plan.answer_target.source, "ocr")
+        self.assertEqual(plan.answer_target.evidence_unit_ids, ["number"])
+        self.assertIn("negative constraints were removed", " ".join(plan.planner_warnings))
+        self.assertNotIn("6 ký tự chữ Hán", plan.units_by_id(["number"])[0].known_text_literals)
+
+    def test_role_aware_trake_never_counts_locator_as_event(self):
+        plan = self.planner.plan(
+            "Đoạn video bắt đầu bằng một con lân trắng.\nE1 Hai con rồng xoay vòng.\nE2 Dùi chạm kẻng đồng.",
+            TaskType.TRAKE,
+        )
+        self.assertEqual(plan.ordered_event_ids, ["event-1", "event-2"])
+        self.assertNotIn("locator-1", plan.ordered_event_ids)
+        self.assertEqual(
+            plan.units_by_id(["locator-1"])[0].roles,
+            [QueryRole.VIDEO_LOCATOR],
+        )
 
     def test_gemini_key_is_sent_in_header_and_never_in_url(self):
         captured = {}
@@ -180,6 +255,7 @@ class OnlinePlannerTests(unittest.TestCase):
         def _urlopen(request, timeout):
             captured["url"] = request.full_url
             captured["headers"] = {key.casefold(): value for key, value in request.header_items()}
+            captured["body"] = json.loads(request.data.decode("utf-8"))
             captured["timeout"] = timeout
             return _Response()
 
@@ -189,6 +265,11 @@ class OnlinePlannerTests(unittest.TestCase):
         self.assertNotIn("secret-key", captured["url"])
         self.assertNotIn("?key=", captured["url"])
         self.assertEqual(captured["headers"]["x-goog-api-key"], "secret-key")
+        self.assertIn("responseSchema", captured["body"]["generationConfig"])
+        self.assertIn(
+            "query_units",
+            captured["body"]["generationConfig"]["responseSchema"]["properties"],
+        )
         self.assertEqual(captured["timeout"], 3.0)
 
     def test_gemini_uses_current_default_and_preserves_explicit_model_override(self):

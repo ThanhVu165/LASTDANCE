@@ -8,12 +8,16 @@ from collections import defaultdict
 import streamlit as st
 
 from shared.schemas.online import (
+    AnswerTarget,
     KISCandidate,
     QACandidate,
+    QueryRole,
     QuerySpec,
+    QueryUnit,
     SearchRequest,
     TaskType,
     TrakeCandidate,
+    UnifiedQueryPlan,
 )
 
 from online.engine import OnlineEngine
@@ -29,6 +33,236 @@ st.set_page_config(page_title="LASTDANCE Online", layout="wide")
 @st.cache_resource(show_spinner="Loading and validating production artifacts...")
 def _engine() -> OnlineEngine:
     return OnlineEngine.from_environment(deep_preflight=False)
+
+
+def _split_editor_values(value: object) -> list[str]:
+    return list(
+        dict.fromkeys(
+            item.strip()
+            for item in str(value or "").replace(";", "|").split("|")
+            if item.strip()
+        )
+    )
+
+
+def _optional_int(value: object) -> int | None:
+    text = str(value or "").strip()
+    if not text or text.casefold() in {"none", "nan"}:
+        return None
+    return int(float(text))
+
+
+def _render_query_plan_editor(
+    plan: UnifiedQueryPlan,
+    spec: QuerySpec,
+) -> UnifiedQueryPlan | None:
+    st.subheader("Phân tích truy vấn")
+    st.caption(
+        "Một unit có thể mang nhiều role. Dùng dấu | để phân tách roles, modalities và text clues."
+    )
+    for warning in plan.planner_warnings:
+        st.warning(warning)
+    global_context = st.text_area(
+        "Global context (English)",
+        value=plan.global_context_en,
+        height=90,
+        key=f"plan-global-{spec.query_name}",
+    )
+    rows = [
+        {
+            "unit_id": unit.unit_id,
+            "description_original": unit.description_original,
+            "retrieval_query_en": unit.retrieval_query_en,
+            "roles": " | ".join(role.value for role in unit.roles),
+            "requiredness": unit.requiredness,
+            "modalities": " | ".join(unit.modalities),
+            "temporal_group": unit.temporal_group,
+            "temporal_order": unit.temporal_order,
+            "known_text_literals": " | ".join(unit.known_text_literals),
+            "visual_text_attributes": " | ".join(unit.visual_text_attributes),
+            "confidence": unit.confidence,
+        }
+        for unit in plan.query_units
+    ]
+    edited_rows = st.data_editor(
+        rows,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        disabled=["unit_id", "description_original", "confidence"],
+        key=f"plan-units-{spec.query_name}",
+    )
+    records = edited_rows.to_dict("records") if hasattr(edited_rows, "to_dict") else edited_rows
+    try:
+        units = [
+            QueryUnit(
+                unit_id=str(row["unit_id"]),
+                description_original=str(row["description_original"]),
+                retrieval_query_en=str(row["retrieval_query_en"]),
+                roles=[QueryRole(value.strip().upper()) for value in _split_editor_values(row["roles"])],
+                requiredness=str(row["requiredness"]).strip().lower(),
+                modalities=[value.lower() for value in _split_editor_values(row["modalities"])],
+                temporal_group=_optional_int(row.get("temporal_group")),
+                temporal_order=_optional_int(row.get("temporal_order")),
+                known_text_literals=_split_editor_values(row.get("known_text_literals")),
+                visual_text_attributes=_split_editor_values(row.get("visual_text_attributes")),
+                confidence=float(row["confidence"]),
+            )
+            for row in records
+        ]
+    except Exception as error:
+        st.error(f"Query unit edit is invalid: {error}")
+        return None
+
+    unit_ids = [unit.unit_id for unit in units]
+    answer_target = plan.answer_target
+    ordered_event_ids: list[str] = []
+    submission_target_ids: list[str] = []
+    if spec.task_type == TaskType.KIS:
+        submission_target_ids = st.multiselect(
+            "KIS submission target units",
+            options=unit_ids,
+            default=[value for value in plan.submission_target_ids if value in unit_ids],
+            key=f"plan-targets-{spec.query_name}",
+        )
+        units = [
+            unit.model_copy(
+                update={
+                    "roles": list(
+                        dict.fromkeys(
+                            [
+                                *unit.roles,
+                                *(
+                                    [QueryRole.TARGET_MOMENT]
+                                    if unit.unit_id in submission_target_ids
+                                    else []
+                                ),
+                            ]
+                        )
+                    )
+                }
+            )
+            for unit in units
+        ]
+        answer_target = None
+    elif spec.task_type == TaskType.QA:
+        current_evidence = answer_target.evidence_unit_ids if answer_target else []
+        evidence_ids = st.multiselect(
+            "QA answer-evidence units",
+            options=unit_ids,
+            default=[value for value in current_evidence if value in unit_ids],
+            key=f"plan-evidence-{spec.query_name}",
+        )
+        source = st.selectbox(
+            "Unknown answer source",
+            ["visual", "ocr", "asr", "mixed"],
+            index=["visual", "ocr", "asr", "mixed"].index(
+                answer_target.source if answer_target else "visual"
+            ),
+            key=f"plan-answer-source-{spec.query_name}",
+        )
+        value_type = st.selectbox(
+            "Unknown answer type",
+            ["number", "color", "person", "place", "free_text"],
+            index=["number", "color", "person", "place", "free_text"].index(
+                answer_target.value_type if answer_target else "free_text"
+            ),
+            key=f"plan-answer-type-{spec.query_name}",
+        )
+        question = st.text_area(
+            "Question passed to OCR/VLM answerer",
+            value=answer_target.question if answer_target else spec.raw_query,
+            height=90,
+            key=f"plan-question-{spec.query_name}",
+        )
+        units = [
+            unit.model_copy(
+                update={
+                    "roles": list(
+                        dict.fromkeys(
+                            [
+                                *unit.roles,
+                                *(
+                                    [QueryRole.TARGET_MOMENT, QueryRole.ANSWER_EVIDENCE]
+                                    if unit.unit_id in evidence_ids
+                                    else []
+                                ),
+                            ]
+                        )
+                    ),
+                    "modalities": list(
+                        dict.fromkeys(
+                            [
+                                *unit.modalities,
+                                *(["ocr"] if unit.unit_id in evidence_ids and source in {"ocr", "mixed"} else []),
+                                *(["asr"] if unit.unit_id in evidence_ids and source in {"asr", "mixed"} else []),
+                            ]
+                        )
+                    ),
+                }
+            )
+            for unit in units
+        ]
+        answer_target = AnswerTarget(
+            question=question,
+            value_type=value_type,
+            source=source,
+            evidence_unit_ids=evidence_ids,
+            value_is_unknown=True,
+        ) if evidence_ids else None
+        submission_target_ids = evidence_ids
+    else:
+        ordered_text = st.text_input(
+            "TRAKE ordered event IDs (chronological, separated by |)",
+            value=" | ".join(plan.ordered_event_ids),
+            key=f"plan-events-{spec.query_name}",
+        )
+        ordered_event_ids = _split_editor_values(ordered_text)
+        ordered_set = set(ordered_event_ids)
+        units = [
+            unit.model_copy(
+                update={
+                    "roles": list(
+                        dict.fromkeys(
+                            [
+                                *(role for role in unit.roles if role != QueryRole.ORDERED_EVENT),
+                                *(
+                                    [QueryRole.ORDERED_EVENT]
+                                    if unit.unit_id in ordered_set
+                                    else []
+                                ),
+                            ]
+                        )
+                    )
+                }
+            )
+            for unit in units
+        ]
+        answer_target = None
+
+    try:
+        draft = UnifiedQueryPlan.model_validate(
+            {
+                **plan.model_dump(mode="python"),
+                "global_context_en": global_context,
+                "caption_en": global_context,
+                "query_units": [unit.model_dump(mode="python") for unit in units],
+                "answer_target": answer_target.model_dump(mode="python") if answer_target else None,
+                "ordered_event_ids": ordered_event_ids,
+                "submission_target_ids": submission_target_ids,
+                "operator_reviewed": True,
+            }
+        )
+        before = plan.model_dump(exclude={"operator_reviewed", "operator_edited"})
+        after = draft.model_dump(exclude={"operator_reviewed", "operator_edited"})
+        draft = draft.model_copy(update={"operator_edited": before != after})
+        return draft.validate_for_task(
+            spec.task_type,
+            expected_event_count=spec.expected_event_count,
+        )
+    except Exception as error:
+        st.error(f"Query plan is not ready: {error}")
+        return None
 
 
 def _candidate_summary(candidate: object) -> str:
@@ -69,6 +303,7 @@ def _candidate_rows(candidates: list[object]) -> list[dict[str, object]]:
             if isinstance(candidate, QACandidate):
                 row["answer"] = candidate.answer
                 row["confidence"] = round(candidate.confidence, 4)
+                row["requires_review"] = candidate.requires_review
             rows.append(row)
     return rows
 
@@ -193,13 +428,21 @@ def _render_evidence(
             )
         )
         if isinstance(candidate, QACandidate):
+            if candidate.requires_review:
+                st.warning("Answer này chưa qua auto-accept; chọn thủ công đồng nghĩa bạn đã xác minh.")
             answer = st.text_input(
                 "Answer (max 100 characters)",
                 value=candidate.answer,
                 max_chars=100,
                 key=f"answer-{prefix}",
             )
-            edited = candidate.model_copy(update={"frame_id": frame_id, "answer": answer})
+            edited = candidate.model_copy(
+                update={
+                    "frame_id": frame_id,
+                    "answer": answer,
+                    "requires_review": False if selected else candidate.requires_review,
+                }
+            )
         else:
             edited = candidate.model_copy(update={"frame_id": frame_id})
         if st.button("Decode exact source frame", key=f"decode-{prefix}"):
@@ -250,6 +493,8 @@ def _valid_bulk(candidates: list[object], spec: QuerySpec) -> list[object]:
     for candidate in candidates:
         if isinstance(candidate, QACandidate):
             if not candidate.answer.strip() or candidate.answer.strip().casefold() == "uncertain":
+                continue
+            if candidate.requires_review:
                 continue
         if isinstance(candidate, TrakeCandidate):
             if len(candidate.frame_ids) != spec.expected_event_count:
@@ -520,16 +765,53 @@ def main() -> None:
         st.error(f"Query package invalid: {error}")
         return
     max_results = st.slider("Maximum hypotheses", min_value=1, max_value=100, value=100)
-    if st.button("Search", type="primary"):
+    plan_store = st.session_state.setdefault("query_plans", {})
+    analyze, rerun_search = st.columns(2)
+    with analyze:
+        analyze_clicked = st.button(
+            "1. Phân tích truy vấn",
+            type="primary" if spec.query_name not in plan_store else "secondary",
+            key=f"analyze-{spec.query_name}",
+        )
+    if analyze_clicked:
         try:
-            with st.spinner("Planning, retrieving and verifying frame evidence..."):
+            with st.spinner("Gemini/Qwen đang tách locator, target và task evidence..."):
+                plan_store[spec.query_name] = engine.plan(spec)
+                current_run = st.session_state.get("search_run")
+                if (
+                    current_run is not None
+                    and current_run.request.query_spec is not None
+                    and current_run.request.query_spec.query_name == spec.query_name
+                ):
+                    st.session_state.pop("search_run", None)
+        except Exception as error:
+            st.error(f"Planning failed: {type(error).__name__}: {error}")
+
+    generated_plan = plan_store.get(spec.query_name)
+    if generated_plan is None:
+        st.info("Bấm ‘Phân tích truy vấn’ để xem và xác nhận vai trò trước khi retrieval.")
+        _workspace_controls(engine, spec, specs, [], [])
+        return
+    edited_plan = _render_query_plan_editor(generated_plan, spec)
+    with rerun_search:
+        search_clicked = st.button(
+            "2. Chạy retrieval với plan đã duyệt",
+            type="primary",
+            disabled=edited_plan is None,
+            key=f"search-{spec.query_name}",
+        )
+    if search_clicked and edited_plan is not None:
+        try:
+            plan_store[spec.query_name] = edited_plan
+            with st.spinner("Retrieving and verifying role-aware frame evidence..."):
                 st.session_state["search_run"] = engine.search(
                     SearchRequest(
                         task_type=spec.task_type,
                         raw_query=spec.raw_query,
                         query_spec=spec,
                         max_results=max_results,
-                    )
+                    ),
+                    query_plan=edited_plan,
                 )
         except Exception as error:
             st.error(f"Search failed: {type(error).__name__}: {error}")

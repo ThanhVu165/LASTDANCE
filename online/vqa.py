@@ -245,8 +245,14 @@ class GeminiVQAAnswerer(VideoAnswerer):
 
 
 class FallbackVQAAnswerer(VideoAnswerer):
-    def __init__(self, providers: Sequence[VideoAnswerer]) -> None:
+    def __init__(
+        self,
+        providers: Sequence[VideoAnswerer],
+        *,
+        accept_confidence: float = 0.85,
+    ) -> None:
         self.providers = list(providers)
+        self.accept_confidence = accept_confidence
 
     def answer(
         self,
@@ -256,6 +262,8 @@ class FallbackVQAAnswerer(VideoAnswerer):
         question: str,
     ) -> tuple[str, float, list[str]]:
         warnings: list[str] = []
+        best_answer = "Uncertain"
+        best_confidence = 0.0
         for provider in self.providers:
             answer, confidence, provider_warnings = provider.answer(
                 video_id=video_id,
@@ -264,7 +272,15 @@ class FallbackVQAAnswerer(VideoAnswerer):
             )
             warnings.extend(provider_warnings)
             if answer.strip().casefold() != "uncertain" and confidence > 0:
-                return answer, confidence, warnings
+                if best_answer != "Uncertain" and _normalize_answer(answer) == _normalize_answer(best_answer):
+                    return answer, max(confidence, best_confidence), warnings
+                if confidence > best_confidence:
+                    best_answer, best_confidence = answer, confidence
+                if confidence >= self.accept_confidence:
+                    return answer, confidence, warnings
+        if best_answer != "Uncertain":
+            warnings.append("Low-confidence answer kept for operator review after fallback verification")
+            return best_answer, best_confidence, warnings
         return "Uncertain", 0.0, warnings or ["VQA unavailable; answer requires operator review"]
 
 

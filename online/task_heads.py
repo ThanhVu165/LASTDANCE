@@ -193,26 +193,35 @@ def build_qa_candidates(
     question = plan.question or plan.raw_query
     for rank, video in enumerate(hypotheses):
         frames = video.best_frames[:12]
-        if not frames:
+        if not frames or rank >= config.qa_answer_video_top_k:
             continue
         locator = min(1.0, max(0.0, 0.6 * video.video_score + 0.4 * frames[0].final_score))
-        if locator > config.qa_similarity_threshold and rank < config.qa_answer_video_top_k:
-            answer, answer_confidence, answer_warnings = answerer.answer(
-                video_id=video.video_id,
-                frames=frames,
-                question=question,
-            )
-            warnings.extend(answer_warnings)
-        else:
-            answer, answer_confidence = "Uncertain", 0.0
+        # Locator confidence controls auto-accept only. It must never prevent an
+        # answer attempt on the configured Top-N candidate videos.
+        answer, answer_confidence, answer_warnings = answerer.answer(
+            video_id=video.video_id,
+            frames=frames,
+            question=question,
+        )
+        warnings.extend(answer_warnings)
         answer = answer[:100] if answer.strip() else "Uncertain"
+        if answer.casefold() == "uncertain" or answer_confidence <= 0.0:
+            warnings.append(
+                f"QA answer unavailable for {video.video_id}; evidence remains available for manual review"
+            )
+            continue
+        requires_review = (
+            locator <= config.qa_similarity_threshold
+            or answer_confidence < config.qa_similarity_threshold
+        )
         candidates = [
             QACandidate(
                 video_id=video.video_id,
                 frame_id=frame.frame_id,
                 answer=answer,
                 score=0.55 * video.video_score + 0.45 * frame.final_score,
-                confidence=min(locator, max(answer_confidence, locator if answer == "Uncertain" else answer_confidence)),
+                confidence=min(locator, answer_confidence),
+                requires_review=requires_review,
                 evidence=frame,
             )
             for frame in frames

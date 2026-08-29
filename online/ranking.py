@@ -6,7 +6,7 @@ from collections import defaultdict
 from statistics import mean
 from typing import Iterable
 
-from shared.schemas.online import FrameEvidence, UnifiedQueryPlan, VideoHypothesis
+from shared.schemas.online import FrameEvidence, QueryRole, UnifiedQueryPlan, VideoHypothesis
 
 from .artifacts import ArtifactRegistry
 from .config import OnlineConfig
@@ -83,32 +83,50 @@ def rank_videos(
         ranked = sorted(video_scores, key=video_scores.get, reverse=True)[: config.video_part_top_k]
         query_top_videos[query_text] = set(ranked)
 
-    scene_labels = list(plan.scenes or [plan.caption_en])
-    global_queries = list(plan.retrieval_queries)
+    locator_labels = list(
+        dict.fromkeys(
+            unit.retrieval_query_en
+            for unit in plan.units_for_role(QueryRole.VIDEO_LOCATOR)
+        )
+    )
+    target_labels = list(
+        dict.fromkeys(
+            unit.retrieval_query_en
+            for unit in plan.query_units
+            if QueryRole.TARGET_MOMENT in unit.roles
+            or QueryRole.ANSWER_EVIDENCE in unit.roles
+        )
+    )
+    if not target_labels:
+        target_labels = locator_labels or [plan.global_context_en]
+    if not locator_labels:
+        locator_labels = target_labels
+    global_queries = list(dict.fromkeys([plan.global_context_en, *plan.retrieval_queries]))
     hypotheses: list[VideoHypothesis] = []
     all_videos = set(by_video) | set().union(
         *(scores.keys() for scores in query_video_scores.values())
     )
     for video_id in all_videos:
-        scene_scores = [
-            query_video_scores.get(scene, {}).get(video_id, 0.0) for scene in scene_labels
-        ]
-        coverage_hits = [
-            video_id in query_top_videos.get(scene, set()) for scene in scene_labels
-        ]
+        def role_evidence(labels: list[str]) -> tuple[float, list[bool]]:
+            scores = [query_video_scores.get(label, {}).get(video_id, 0.0) for label in labels]
+            hits = [video_id in query_top_videos.get(label, set()) for label in labels]
+            coverage_value = sum(hits) / len(hits) if hits else 0.0
+            mean_value = mean(scores) if scores else 0.0
+            weakest_value = min(scores) if scores else 0.0
+            return 0.50 * coverage_value + 0.30 * mean_value + 0.20 * weakest_value, hits
+
+        locator_evidence, _locator_hits = role_evidence(locator_labels)
+        target_evidence, coverage_hits = role_evidence(target_labels)
         coverage = sum(coverage_hits) / len(coverage_hits) if coverage_hits else 0.0
-        mean_scene = mean(scene_scores) if scene_scores else 0.0
-        weakest_scene = min(scene_scores) if scene_scores else 0.0
         global_values = [
             query_video_scores.get(query, {}).get(video_id, 0.0) for query in global_queries
         ]
-        global_score = max(global_values) if global_values else mean_scene
+        global_score = max(global_values) if global_values else target_evidence
         distinct = _distinct_shot(by_video.get(video_id, []))
         consensus = mean([frame.model_consensus for frame in distinct[:3]]) if distinct else 0.0
         base_score = (
-            config.video_coverage_weight * coverage
-            + config.video_evidence_weight * mean_scene
-            + config.video_weakest_weight * weakest_scene
+            config.video_locator_weight * locator_evidence
+            + config.video_target_weight * target_evidence
             + config.video_global_weight * global_score
             + config.video_consensus_weight * consensus
         )
@@ -129,10 +147,10 @@ def rank_videos(
                 model_consensus=consensus,
                 best_frames=distinct[:100],
                 matched_scenes=[
-                    label for label, hit in zip(scene_labels, coverage_hits) if hit
+                    label for label, hit in zip(target_labels, coverage_hits) if hit
                 ],
                 missing_scenes=[
-                    label for label, hit in zip(scene_labels, coverage_hits) if not hit
+                    label for label, hit in zip(target_labels, coverage_hits) if not hit
                 ],
             )
         )
@@ -146,6 +164,8 @@ def rank_trake_videos(
     moments: list[str],
     registry: ArtifactRegistry,
     config: OnlineConfig,
+    *,
+    locator_result: RetrievalResult | None = None,
 ) -> list[VideoHypothesis]:
     by_moment_video: list[dict[str, list[FrameEvidence]]] = []
     for result in moment_results:
@@ -153,17 +173,42 @@ def rank_trake_videos(
         for frame in result.evidence:
             grouped[frame.video_id].append(frame)
         by_moment_video.append({video: _distinct_shot(frames) for video, frames in grouped.items()})
-    all_videos = set().union(*(grouped.keys() for grouped in by_moment_video))
+    locator_by_video: dict[str, float] = {}
+    if locator_result is not None:
+        for frame in locator_result.evidence:
+            locator_by_video[frame.video_id] = max(
+                locator_by_video.get(frame.video_id, 0.0), frame.final_score
+            )
+    all_videos = set(locator_by_video) | set().union(
+        *(grouped.keys() for grouped in by_moment_video)
+    )
+    moment_top_videos = [
+        {
+            video_id
+            for video_id, _frames in sorted(
+                grouped.items(),
+                key=lambda item: item[1][0].final_score if item[1] else 0.0,
+                reverse=True,
+            )[: config.video_part_top_k]
+        }
+        for grouped in by_moment_video
+    ]
     hypotheses: list[VideoHypothesis] = []
     for video_id in all_videos:
         strengths = [frames[0].final_score if (frames := grouped.get(video_id, [])) else 0.0 for grouped in by_moment_video]
-        hits = [strength > 0.0 for strength in strengths]
+        hits = [video_id in top_videos for top_videos in moment_top_videos]
         coverage = sum(hits) / len(moment_results)
         weakest = min(strengths) if strengths else 0.0
         average = mean(strengths) if strengths else 0.0
         consensus_values = [frames[0].model_consensus for grouped in by_moment_video if (frames := grouped.get(video_id, []))]
         consensus = mean(consensus_values) if consensus_values else 0.0
-        score = 0.50 * coverage + 0.20 * weakest + 0.20 * average + 0.10 * consensus
+        score = (
+            config.trake_locator_weight * locator_by_video.get(video_id, 0.0)
+            + config.trake_event_coverage_weight * coverage
+            + config.trake_weakest_weight * weakest
+            + config.trake_mean_weight * average
+            + config.trake_consensus_weight * consensus
+        )
         merged = _distinct_shot(frame for grouped in by_moment_video for frame in grouped.get(video_id, [])[:3])
         hypotheses.append(
             VideoHypothesis(

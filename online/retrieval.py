@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import numpy as np
 
-from shared.schemas.online import ArtifactAvailability, FrameEvidence, UnifiedQueryPlan
+from shared.schemas.online import ArtifactAvailability, FrameEvidence, QueryRole, UnifiedQueryPlan
 
 from .artifacts import ArtifactRegistry
 from .config import OnlineConfig
@@ -31,17 +31,26 @@ class _VisualContext:
     direct_hits: dict[str, list[set[int]]]
 
 
-def visual_query_texts(plan: UnifiedQueryPlan) -> list[str]:
-    """Return independent global, scene and constraint queries in stable order."""
+def visual_query_texts(
+    plan: UnifiedQueryPlan,
+    *,
+    roles: set[QueryRole] | None = None,
+    include_global: bool = True,
+) -> list[str]:
+    """Return independent role-filtered queries in stable order."""
 
     result: list[str] = []
-    for value in (
-        plan.caption_en,
-        *plan.retrieval_queries,
-        *plan.scenes,
-        *plan.must_have,
-        *plan.should_have,
-    ):
+    values: list[str] = []
+    if include_global:
+        values.extend([plan.global_context_en, *plan.retrieval_queries])
+    values.extend(
+        unit.retrieval_query_en
+        for unit in plan.query_units
+        if roles is None or roles.intersection(unit.roles)
+    )
+    if roles is None:
+        values.extend([*plan.must_have, *plan.should_have])
+    for value in values:
         text = value.strip()
         if text and text not in result:
             result.append(text)
@@ -59,23 +68,45 @@ class FrameRetriever:
         self.encoders = encoders
         self.config = config
 
-    def search(self, plan: UnifiedQueryPlan) -> RetrievalResult:
-        texts = visual_query_texts(plan)
+    def search(
+        self,
+        plan: UnifiedQueryPlan,
+        *,
+        roles: set[QueryRole] | None = None,
+        include_global: bool = True,
+    ) -> RetrievalResult:
+        texts = visual_query_texts(plan, roles=roles, include_global=include_global)
+        if not texts:
+            raise ValueError("role-filtered retrieval has no visual query")
         warnings: list[str] = []
         candidate_uids: set[int] = set()
         context = self._initial_visual_search(texts, candidate_uids, warnings)
 
+        selected_units = [
+            unit
+            for unit in plan.query_units
+            if roles is None or roles.intersection(unit.roles)
+        ]
+        ocr_terms = list(plan.visible_text)
+        asr_terms = list(plan.spoken_text)
+        for unit in selected_units:
+            if "ocr" in unit.modalities:
+                ocr_terms.extend(unit.known_text_literals)
+            if "asr" in unit.modalities:
+                asr_terms.extend(unit.known_text_literals)
+        ocr_terms = list(dict.fromkeys(value for value in ocr_terms if value.strip()))
+        asr_terms = list(dict.fromkeys(value for value in asr_terms if value.strip()))
         ocr_scores: dict[int, float] = {}
         asr_scores: dict[int, float] = {}
-        if plan.visible_text and self.registry.statuses["ocr"].availability == ArtifactAvailability.READY:
-            ocr_scores = FtsSearcher(self.registry.layout.ocr, "ocr").search(plan.visible_text, limit=self.config.visual_top_k)
+        if ocr_terms and self.registry.statuses["ocr"].availability == ArtifactAvailability.READY:
+            ocr_scores = FtsSearcher(self.registry.layout.ocr, "ocr").search(ocr_terms, limit=self.config.visual_top_k)
             candidate_uids.update(uid for uid in ocr_scores if uid in self.registry.catalog.by_uid)
-        elif plan.visible_text:
+        elif ocr_terms:
             warnings.append(f"OCR {self.registry.statuses['ocr'].availability.value}; visual weights were renormalized")
-        if plan.spoken_text and self.registry.statuses["asr"].availability == ArtifactAvailability.READY:
-            asr_scores = FtsSearcher(self.registry.layout.asr, "asr").search(plan.spoken_text, limit=self.config.visual_top_k)
+        if asr_terms and self.registry.statuses["asr"].availability == ArtifactAvailability.READY:
+            asr_scores = FtsSearcher(self.registry.layout.asr, "asr").search(asr_terms, limit=self.config.visual_top_k)
             candidate_uids.update(uid for uid in asr_scores if uid in self.registry.catalog.by_uid)
-        elif plan.spoken_text:
+        elif asr_terms:
             warnings.append(f"ASR {self.registry.statuses['asr'].availability.value}; visual weights were renormalized")
 
         all_scored = set(candidate_uids)
@@ -83,11 +114,20 @@ class FrameRetriever:
             all_scored.update(frame.keyframe_uid for frame in self.registry.catalog.neighbors(uid, self.config.neighbor_radius))
         per_query_visual, raw_channels, consensus = self._score_uids(context, texts, all_scored)
         combined_visual = combine_query_scores(per_query_visual, consensus_bonus=self.config.query_consensus_bonus)
+        modality_weights = dict(plan.modality_weights)
+        if ocr_terms and "ocr" not in modality_weights:
+            modality_weights = {"visual": 0.55, "ocr": 0.45}
+        if asr_terms and "asr" not in modality_weights:
+            modality_weights = (
+                {"visual": 0.50, "ocr": 0.25, "asr": 0.25}
+                if ocr_terms
+                else {"visual": 0.55, "asr": 0.45}
+            )
         fused_all = fuse_modalities(
             combined_visual,
             ocr_scores=ocr_scores,
             asr_scores=asr_scores,
-            modality_weights=plan.modality_weights,
+            modality_weights=modality_weights,
         )
 
         reranked_raw: dict[int, float] = {}

@@ -6,7 +6,7 @@
 > ghi vào Changelog. Không duy trì spec tách nhánh hoặc tài liệu kiến trúc archived song
 > song; chi tiết vận hành chỉ nằm trong các runbook được liên kết từ README.
 
-**Cập nhật:** 28/08/2026
+**Cập nhật:** 29/08/2026
 **Thời gian còn lại:** 6 ngày
 **Máy tham chiếu local/Shot:** Intel i5-12450H, RTX 4050 Laptop 6 GiB VRAM,
 Windows/Colab, Python 3.11. **Visual Embedding Kaggle GPU:** Python 3.12.x; giữ PyTorch CUDA
@@ -534,6 +534,10 @@ SearchRequest + QuerySpec
         ↓
 Unified Query Planner (Gemini → Qwen local → rule)
         ↓
+Operator review: VIDEO_LOCATOR | TARGET_MOMENT | ANSWER_EVIDENCE | ORDERED_EVENT
+        ↓
+Video retrieval theo toàn plan → target/event retrieval tách riêng
+        ↓
 Visual retrieval độc lập: SigLIP + EVA SRRF; CLIP comparison/rollback
         + OCR/ASR FTS theo intent
         ↓
@@ -552,7 +556,8 @@ Critical path nằm trong `online/`; Streamlit gọi trực tiếp `OnlineEngine
 FastAPI/backend trung gian**.
 
 ```python
-OnlineEngine.search(SearchRequest) -> SearchRun
+OnlineEngine.plan(QuerySpec) -> UnifiedQueryPlan
+OnlineEngine.search(SearchRequest, query_plan: UnifiedQueryPlan | None) -> SearchRun
 ```
 
 `SearchRequest`:
@@ -565,8 +570,10 @@ max_results: 1..100 (default 100)
 mode: accurate
 ```
 
-`QuerySpec` khóa `query_name`, `source_filename`, `task_type`, nguyên văn query và
-`expected_event_count` bắt buộc cho TRAKE. `SearchRun` trả query plan, artifact status,
+`plan()` tạo contract có thể review mà chưa chạy FAISS. CLI được phép gọi `search()` với
+`query_plan=None` để planner tự chạy; Streamlit bắt buộc gọi `plan()`, cho operator sửa rồi
+truyền plan đã duyệt vào `search()`. `QuerySpec` khóa `query_name`, `source_filename`,
+`task_type`, nguyên văn query và `expected_event_count` bắt buộc cho TRAKE. `SearchRun` trả query plan, artifact status,
 Top video hypotheses, Top task candidates, timing, provenance và warning. Mọi evidence dùng
 `keyframe_uid`; candidate/submission chỉ dùng `video_id` + `frame_id`.
 
@@ -621,24 +628,43 @@ Gemini (default hiện hành gemini-3.5-flash-lite)
   → deterministic rule fallback
 ```
 
-Planner output chuẩn:
+Planner output chuẩn là role-aware; một unit được phép mang nhiều role:
 
 ```text
-raw_query, caption_en, retrieval_queries[≤2], scenes[], anchor_moment_index,
-must_have[], should_have[], negative_constraints[], visible_text[], spoken_text[],
-modality_weights, question, answer_format, answer_source, ordered_moments[], planner_provider
+VIDEO_LOCATOR   = clue dùng tìm đúng video
+TARGET_MOMENT   = cảnh/frame KIS hoặc QA cần định vị
+ANSWER_EVIDENCE = nơi chứa dữ kiện để trả lời QA
+ORDERED_EVENT   = đúng một event phải xuất hiện trong sequence TRAKE
+```
+
+```text
+UnifiedQueryPlan:
+  raw_query, global_context_en, retrieval_queries[≤2], query_units[],
+  answer_target, submission_target_ids[], ordered_event_ids[], planner_warnings[]
+
+QueryUnit:
+  unit_id, description_original, retrieval_query_en, roles[], requiredness,
+  modalities[], temporal_group, temporal_order, known_text_literals[],
+  visual_text_attributes[], confidence
 ```
 
 Quy tắc:
 
 - giữ nguyên query gốc để audit nhưng mọi visual query từ model phải là tiếng Anh;
-- `caption_en` là faithful global query bắt buộc; thêm tối đa một discriminative global query;
-- scene/event được giữ thành query độc lập, không nối câu dài và không mean-pool text vector;
-- không thêm người/vật/hành động/tên riêng ngoài query; negative constraint không thành hard
-  visual filter;
-- visible/spoken intent phải xuất phát từ query gốc. OCR dùng literal discriminative, ví dụ
-  “giá dầu mazut”, thay vì đưa toàn bộ câu hỏi nhiễu vào FTS;
+- `global_context_en` là faithful global query bắt buộc; thêm tối đa một discriminative query;
+- `description_original` phải là span có thật trong query; thuộc tính đồng thời ở cùng
+  `temporal_group`, chỉ tách unit mới khi thực sự đổi cảnh/thời gian;
+- visual query từ model phải bằng tiếng Anh, chạy độc lập và không mean-pool text vector;
+- không thêm người/vật/hành động/tên riêng; provider không được tạo negative constraint;
+- `known_text_literals` chỉ chứa text mà query đã nêu chính xác, ví dụ “giá dầu mazut”. Mô tả
+  “biển đỏ có 6 ký tự chữ Hán” thuộc `visual_text_attributes`; số chưa biết đang được hỏi là
+  `AnswerTarget`, tuyệt đối không đưa hai loại này vào FTS exact/prefix;
+- QA bắt buộc có `AnswerTarget(value_is_unknown=true)` và evidence unit; TRAKE chỉ dùng ID
+  mang role `ORDERED_EVENT`, context locator không được tính thành event;
 - fallback được ghi warning; rule fallback không được giả là đã dịch tiếng Anh.
+
+Schema cũ `scenes/anchor_moment_index/ordered_moments` chỉ được adapter đọc để migration;
+Online Core không dùng các trường này để quyết định frame, answer evidence hoặc event.
 
 ### 3.4 Visual retrieval và SRRF
 
@@ -681,6 +707,10 @@ OCR FTS dùng `detected_text`; ASR FTS dùng `transcribed_text`. Search cascade:
 Các MATCH stage không so trực tiếp trị tuyệt đối BM25 giữa query khác nhau; thứ tự cascade
 luôn thắng trước, BM25 chỉ quyết định rank trong cùng stage.
 
+Cascade chỉ chạy với `known_text_literals`. Khi QA hỏi một giá trị chưa biết, answer head
+đọc OCR/ASR trực tiếp theo UID của evidence frame và tối đa hai temporal neighbor trước/sau
+trong candidate video; không biến câu hỏi hoặc mô tả kiểu chữ thành MATCH expression.
+
 Trọng số intent mặc định:
 
 ```text
@@ -704,7 +734,7 @@ score_reranked = normalize(frame_score + 0.15 × neighbor_support)
 
 ### 3.6 Frame evidence thành video hypothesis
 
-Khi tính score video, chỉ giữ evidence tốt nhất mỗi shot. Với mỗi query/scene `j`:
+Khi tính score video, chỉ giữ evidence tốt nhất mỗi shot. Với mỗi query unit `j`:
 
 ```text
 evidence_j(v) = 0.7 × max(shot_scores) + 0.3 × mean(top-3 shot_scores)
@@ -712,15 +742,17 @@ evidence_j(v) = 0.7 × max(shot_scores) + 0.3 × mean(top-3 shot_scores)
 
 ```text
 base_video(v) =
-    0.40 × scene_coverage
-  + 0.25 × mean_scene_evidence
-  + 0.15 × weakest_scene
+    0.35 × locator_evidence
+  + 0.45 × target_or_event_evidence
   + 0.10 × global_query
   + 0.10 × model_consensus
 ```
 
-Scene coverage tính video xuất hiện trong Top 50 của từng scene. KIS/QA giữ Top 12 video;
-TRAKE giữ Top 20. Không hard-filter chỉ còn một video trước task head.
+Mỗi role evidence gộp `0,50 × coverage + 0,30 × mean + 0,20 × weakest`; coverage tính video
+xuất hiện trong Top 50 của từng unit. Sau khi giữ Top 12 video KIS/QA, pipeline chạy target
+retrieval riêng: locator frame không được đi thẳng vào submission rank. Target pool không
+hard-dedup theo shot vì keyframe lân cận có thể là exact KIS frame hoặc OCR rõ hơn. TRAKE giữ
+Top 20. Không hard-filter chỉ còn một video trước task head.
 
 ### 3.7 VLM verification/reranking
 
@@ -742,9 +774,10 @@ retrieval score; partial output không phải negative evidence.
 
 #### KIS
 
-Toàn bộ scene dùng tìm đúng video; `anchor_moment_index` chỉ refine frame nộp. Anchor
-retrieval được merge/boost tối đa `0,15`, không thay hoặc giảm evidence gốc. Candidate pool
-giữ tối đa ba frame/shot để exact frame không bị hard-dedup.
+`VIDEO_LOCATOR` và `TARGET_MOMENT` cùng tham gia rank video. Sau đó chỉ các unit trong
+`submission_target_ids` được retrieval lại để rank frame nộp; locator-only frame không được
+chiếm Top 100. Query chỉ có một khoảnh khắc gắn đồng thời hai role. Target candidate pool
+không hard-dedup theo shot để exact frame không bị thay bởi shot leader.
 
 Top 100 có seed `video1, video1, video2, video1, video3`, sau đó weighted round-robin theo
 confidence: tối đa 40 row/video, video đầu mục tiêu 30–40 nếu đủ, Top 5 tối thiểu hai row và
@@ -753,25 +786,30 @@ duplicate.
 
 #### QA
 
-Dùng context để rank video, không đưa đáp án phỏng đoán vào retrieval. Nếu answer source là
-visible/spoken và SQLite tương ứng `READY`, answer được lấy trong candidate video; nếu là
-visual, Gemini → Qwen CUDA → unavailable dùng 6–12 frame evidence. Locator:
+Dùng `VIDEO_LOCATOR` để rank video và `ANSWER_EVIDENCE` để retrieval riêng frame/shot chứa
+đáp án; không đưa đáp án phỏng đoán vào retrieval. `AnswerTarget` mô tả value type/source
+nhưng luôn là unknown. OCR/ASR đọc frame-local + neighbor; confidence thấp tiếp tục qua
+Gemini → Qwen CUDA nếu có, nếu vẫn chưa chắc giữ candidate cho operator review. Locator:
 
 ```text
 locator = 0.60 × video_score + 0.40 × best_frame_score
 ```
 
-Chỉ Top 1 video và `locator > 0,85` được auto hỏi answerer. Hai lượt VQA bất đồng hoặc thiếu
-provider trả `Uncertain` để operator sửa; `Uncertain`, answer rỗng hoặc quá 100 ký tự bị
-bulk-add/export chặn.
+Answerer luôn được gọi cho ít nhất Top 3 video có evidence, kể cả `locator <= 0,85`. Ngưỡng
+`0,85` chỉ kiểm soát auto-accept; answer thấp hơn ngưỡng mang `requires_review=true`. Không
+tạo portfolio gồm các dòng `Uncertain`: video/evidence vẫn hiện để operator xem nhưng chỉ
+answer thật mới thành `QACandidate`. `Uncertain`, answer rỗng, quá 100 ký tự hoặc
+`requires_review=true` bị bulk-add/workspace export chặn; operator chọn và xác minh thủ công
+sẽ hạ cờ review.
 
 #### TRAKE
 
-Mỗi `ordered_moment` chạy toàn retrieval độc lập. Video score:
+Chỉ unit trong `ordered_event_ids` chạy event retrieval độc lập; locator context chạy một
+lượt riêng để rank video và không tham gia Beam Search. Video score:
 
 ```text
-0.50 × moment_coverage + 0.20 × weakest_moment
-+ 0.20 × mean_moment + 0.10 × model_consensus
+0.15 × locator_evidence + 0.45 × event_coverage
++ 0.20 × weakest_event + 0.10 × mean_event + 0.10 × model_consensus
 ```
 
 Mỗi moment/video giữ Top 32 frame khác shot. Beam width 8, chỉ mở rộng frame cùng video,
@@ -781,7 +819,13 @@ khoảng cách thời gian chưa được ground-truth calibrate. Sequence phả
 
 ### 3.9 Streamlit review và Top 100
 
-UI có hai tab:
+Trước hai tab kết quả, UI có bước `Phân tích truy vấn`: gọi `OnlineEngine.plan()`, hiển thị
+global English context và từng QueryUnit, cho sửa retrieval query, nhiều role, modality,
+known literal/visual attribute, target/evidence ID và thứ tự TRAKE. KIS thiếu target, QA
+thiếu AnswerTarget/evidence hoặc TRAKE sai `expected_event_count` bị chặn trước FAISS. Plan
+đã duyệt/chỉnh sửa và SHA-256 được ghi vào provenance.
+
+UI kết quả có hai tab:
 
 - `Top 100`: đúng thứ tự sẽ serialize vào CSV; KIS hiển thị thumbnail phân trang, QA là
   hypothesis frame+answer, TRAKE là sequence hoàn chỉnh;
@@ -1030,3 +1074,10 @@ accuracy phải gắn bộ query/ground truth, revision/config và metric tái l
   `online/` + Streamlit trực tiếp `OnlineEngine`. Khóa data-retention contract theo ba lớp:
   runtime core, accuracy/review media và rebuild/resume-only; MP4 không chặn vector retrieval
   nhưng thiếu MP4 làm mất playback/exact-frame refinement.
+- **29/08/2026 (bản 27)** — Chuyển Unified Query Planner sang contract role-aware đa vai trò
+  `VIDEO_LOCATOR/TARGET_MOMENT/ANSWER_EVIDENCE/ORDERED_EVENT` và API hai pha
+  `plan() → operator review → search(plan)`. Video score tách locator/target; locator-only
+  frame không đi vào KIS/QA submission rank và TRAKE context không thể trở thành event. QA
+  luôn thử Top 3, ngưỡng 0,85 chỉ auto-accept; unknown OCR/ASR được đọc theo evidence UID +
+  neighbors thay vì FTS cả câu hỏi, candidate `requires_review` bị chặn export. Schema cũ
+  chỉ còn adapter migration; Online config nâng schema v3.

@@ -419,6 +419,8 @@ class SubmissionWorkspace:
                     raise ValueError("QA answer must contain 1-100 characters")
                 if item.answer.strip().casefold() in _PLACEHOLDER_ANSWERS:
                     raise ValueError("QA answer must not be an Uncertain placeholder")
+                if item.requires_review:
+                    raise ValueError("QA answer requires operator review before submission")
             if isinstance(item, TrakeCandidate):
                 if len(item.frame_ids) != spec.expected_event_count:
                     raise ValueError(

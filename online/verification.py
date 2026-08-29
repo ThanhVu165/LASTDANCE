@@ -91,14 +91,22 @@ def _contact_sheets(
 
 
 def _prompt(plan: UnifiedQueryPlan, video_id: str, frame_ids: list[int]) -> str:
+    requested_units = [
+        {
+            "unit_id": unit.unit_id,
+            "query": unit.retrieval_query_en,
+            "roles": [role.value for role in unit.roles],
+        }
+        for unit in plan.query_units
+    ]
     return (
         "Verify a candidate video for fine-grained moment retrieval. Use only the supplied "
         "images. Do not infer unseen actions. Return JSON with keys must_have_score and "
         "should_have_score (0..1), scene_matches (strings copied from the requested scenes), "
         "and ranked_frame_ids (only integers from the allowed list, best first).\n"
         f"video_id={video_id}\n"
-        f"caption={plan.caption_en}\n"
-        f"scenes={json.dumps(plan.scenes, ensure_ascii=False)}\n"
+        f"global_context={plan.global_context_en}\n"
+        f"query_units={json.dumps(requested_units, ensure_ascii=False)}\n"
         f"must_have={json.dumps(plan.must_have, ensure_ascii=False)}\n"
         f"should_have={json.dumps(plan.should_have, ensure_ascii=False)}\n"
         f"allowed_frame_ids={frame_ids}"
@@ -352,6 +360,11 @@ def rerank_with_verifier(
             + config.verified_should_weight * result.should_have_score
         )
         matched = result.scene_matches or hypothesis.matched_scenes
+        target_ids = plan.submission_target_ids or plan.ordered_event_ids
+        target_labels = [
+            unit.retrieval_query_en
+            for unit in plan.units_by_id(target_ids)
+        ] or [unit.retrieval_query_en for unit in plan.query_units]
         updated[index] = hypothesis.model_copy(
             update={
                 "video_score": video_score,
@@ -361,7 +374,7 @@ def rerank_with_verifier(
                 "best_frames": reranked_frames,
                 "matched_scenes": matched,
                 "missing_scenes": [
-                    scene for scene in plan.scenes if scene not in set(matched)
+                    scene for scene in target_labels if scene not in set(matched)
                 ],
             }
         )

@@ -97,6 +97,7 @@ class OnlineWorkspaceTests(unittest.TestCase):
                 answer=' Màu "đỏ",\nrất đẹp ',
                 score=0.8,
                 confidence=0.9,
+                requires_review=False,
                 evidence=evidence("L01_V028", 3450, 10.0, 7),
             )
             workspace = SubmissionWorkspace(
@@ -186,6 +187,9 @@ class OnlineWorkspaceTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "placeholder"):
                 workspace.replace_query_draft(qa_spec.query_name, [uncertain])
+            needs_review = uncertain.model_copy(update={"answer": "42"})
+            with self.assertRaisesRegex(ValueError, "requires operator review"):
+                workspace.replace_query_draft(qa_spec.query_name, [needs_review])
             workspace.replace_query_draft(kis_spec.query_name, [item])
             with self.assertRaisesRegex(ValueError, "missing submission rows"):
                 workspace.export_zip()

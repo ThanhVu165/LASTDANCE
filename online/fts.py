@@ -135,3 +135,33 @@ class FtsSearcher:
             for uid in identifiers
             if uid in row_videos
         ]
+
+    def rows_for_uids(
+        self,
+        keyframe_uids: Iterable[int],
+        *,
+        video_id: str,
+    ) -> list[FtsHit]:
+        """Read frame-local text without pretending an unknown QA value is an FTS query."""
+
+        identifiers = list(dict.fromkeys(int(uid) for uid in keyframe_uids))
+        if not identifiers:
+            return []
+        placeholders = ",".join("?" for _ in identifiers)
+        sql = (
+            f"SELECT {self.uid_column}, {self.content_column}, video_id "
+            f"FROM {self.table} WHERE {self.uid_column} IN ({placeholders}) AND video_id = ?"
+        )
+        connection = self._connection()
+        try:
+            rows = connection.execute(sql, [*identifiers, video_id]).fetchall()
+        finally:
+            connection.close()
+        order = {uid: index for index, uid in enumerate(identifiers)}
+        hits = [
+            FtsHit(int(uid), str(row_video), str(content or ""), 1.0)
+            for uid, content, row_video in rows
+            if str(content or "").strip()
+        ]
+        hits.sort(key=lambda item: order.get(item.keyframe_uid, len(order)))
+        return hits
