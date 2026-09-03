@@ -1,0 +1,9 @@
+# PyTorch's official CUDA 12.6 wheel is selected explicitly for Windows GPU workers.
+# Keep this profile separate from offline-local.txt, which pins the CPU wheel.
+--extra-index-url https://download.pytorch.org/whl/cu126
+
+-r base.txt
+
+torch==2.12.1+cu126
+transnetv2-pytorch==1.0.5
+ffmpeg-python==0.2.0

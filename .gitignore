@@ -1,9 +1,22 @@
 # Local datasets, generated indexes, videos, keyframes, and model weights
 /data/
+/models/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.npy
+*.npz
+*.faiss
+*.bin
 
 # Python environments and caches
 /.pytest_cache/
 /backend/.venv/
+/.venv-offline/
+/.venv-online/
+/.venv-shot-gpu/
+/.tools/
 **/__pycache__/
 *.py[cod]
 *.pyo
@@ -13,6 +26,7 @@
 /queries/
 /submissions/
 *.log
+/worker-*.txt
 
 # Local configuration and credentials
 .env

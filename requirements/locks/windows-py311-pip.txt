@@ -1,0 +1,32 @@
+# Resolved on Windows win-64 with CPython 3.11.9 on 2026-08-24.
+# Install after windows-py311-conda-explicit.txt. Do not use on Kaggle/Linux.
+annotated-types==0.8.0
+colorama==0.4.6
+faiss-cpu==1.9.0
+ffmpeg-python==0.2.0
+filelock==3.32.4
+fsspec==2026.7.0
+future==1.0.0
+ImageHash==4.3.1
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+mpmath==1.3.0
+networkx==3.6.1
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+pandas==2.2.3
+pillow==11.0.0
+pydantic==2.10.3
+pydantic_core==2.27.1
+python-dateutil==2.9.0.post0
+pytz==2026.3.post1
+PyWavelets==1.9.0
+scipy==1.17.1
+setuptools==81.0.0
+six==1.17.0
+sympy==1.14.0
+torch==2.12.1
+tqdm==4.67.1
+transnetv2-pytorch==1.0.5
+typing_extensions==4.16.0
+tzdata==2026.3

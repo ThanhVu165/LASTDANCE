@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "correctness_metric": "unicode_nfc_casefold_whitespace_exact_match",
+  "policy_sha256": "344ed662992bd663522dc69ace26c56782437fff637f2e74c6984e7943293989",
+  "ground_truth_frames": 98,
+  "labeled_regions": 98,
+  "buckets": {
+    "fine:len_12_to_32|margin_gt_0.75|logprob_unavailable": {"bucket_id": "fine:len_12_to_32|margin_gt_0.75|logprob_unavailable", "support": 22, "correct": 9, "empirical_accuracy": 0.4090909090909091},
+    "fine:len_32_to_96|margin_0.5_to_0.75|logprob_unavailable": {"bucket_id": "fine:len_32_to_96|margin_0.5_to_0.75|logprob_unavailable", "support": 2, "correct": 0, "empirical_accuracy": 0.0},
+    "fine:len_32_to_96|margin_gt_0.75|logprob_unavailable": {"bucket_id": "fine:len_32_to_96|margin_gt_0.75|logprob_unavailable", "support": 4, "correct": 0, "empirical_accuracy": 0.0},
+    "fine:len_32_to_96|margin_neg_inf_to_0.25|logprob_unavailable": {"bucket_id": "fine:len_32_to_96|margin_neg_inf_to_0.25|logprob_unavailable", "support": 2, "correct": 0, "empirical_accuracy": 0.0},
+    "fine:len_4_to_12|margin_gt_0.75|logprob_unavailable": {"bucket_id": "fine:len_4_to_12|margin_gt_0.75|logprob_unavailable", "support": 36, "correct": 2, "empirical_accuracy": 0.05555555555555555},
+    "fine:len_neg_inf_to_4|margin_gt_0.75|logprob_unavailable": {"bucket_id": "fine:len_neg_inf_to_4|margin_gt_0.75|logprob_unavailable", "support": 32, "correct": 23, "empirical_accuracy": 0.71875},
+    "global": {"bucket_id": "global", "support": 98, "correct": 34, "empirical_accuracy": 0.3469387755102041},
+    "structural:len_12_to_32|margin_gt_0.75": {"bucket_id": "structural:len_12_to_32|margin_gt_0.75", "support": 22, "correct": 9, "empirical_accuracy": 0.4090909090909091},
+    "structural:len_32_to_96|margin_0.5_to_0.75": {"bucket_id": "structural:len_32_to_96|margin_0.5_to_0.75", "support": 2, "correct": 0, "empirical_accuracy": 0.0},
+    "structural:len_32_to_96|margin_gt_0.75": {"bucket_id": "structural:len_32_to_96|margin_gt_0.75", "support": 4, "correct": 0, "empirical_accuracy": 0.0},
+    "structural:len_32_to_96|margin_neg_inf_to_0.25": {"bucket_id": "structural:len_32_to_96|margin_neg_inf_to_0.25", "support": 2, "correct": 0, "empirical_accuracy": 0.0},
+    "structural:len_4_to_12|margin_gt_0.75": {"bucket_id": "structural:len_4_to_12|margin_gt_0.75", "support": 36, "correct": 2, "empirical_accuracy": 0.05555555555555555},
+    "structural:len_neg_inf_to_4|margin_gt_0.75": {"bucket_id": "structural:len_neg_inf_to_4|margin_gt_0.75", "support": 32, "correct": 23, "empirical_accuracy": 0.71875}
+  }
+}

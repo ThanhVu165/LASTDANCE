@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "correctness_metric": "unicode_nfc_casefold_whitespace_exact_match",
+  "evidence_tier": "emergency_single_annotator_100",
+  "review_rows": 100,
+  "review_rows_per_video": 20,
+  "review_rows_per_stratum_per_video": 4,
+  "review_selection_seed": "vintern-gate-b-emergency-100-v1",
+  "min_ground_truth_frames": 100,
+  "min_total_labeled_regions": 100,
+  "min_bucket_samples": 20,
+  "allow_global_bucket_override": false,
+  "output_length_upper_bounds": [4, 12, 32, 96],
+  "guard_margin_upper_bounds": [0.25, 0.5, 0.75],
+  "mean_token_logprob_upper_bounds": [-2.0, -1.0, -0.5]
+}

@@ -1,0 +1,14 @@
+# Kaggle already provides a CUDA-matched torch build. Do not replace it blindly.
+-r base.txt
+
+transformers==5.15.1
+accelerate==1.14.0
+sentence-transformers==6.0.0
+# transformers 5.15.1 requires huggingface-hub>=1.5.0 and safetensors>=0.8.0.
+huggingface-hub==1.28.0
+safetensors==0.8.0
+sentencepiece==0.2.1
+
+# EVA02-CLIP adapter. Keep Kaggle's CUDA-matched torch/torchvision wheels.
+open-clip-torch==3.3.0
+timm==1.0.28

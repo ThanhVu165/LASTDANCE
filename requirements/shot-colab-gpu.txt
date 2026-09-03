@@ -1,0 +1,5 @@
+# Colab supplies a CUDA-matched torch build. Do not replace it from this profile.
+-r base.txt
+
+transnetv2-pytorch==1.0.5
+ffmpeg-python==0.2.0

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "model_id": "5CD-AI/Vintern-1B-v3_5",
+  "model_revision": "b98f263eab246eb5269ade64edbdca8a887dc44d",
+  "model_weight_filename": "model.safetensors",
+  "model_weight_bytes": 3752849256,
+  "model_weight_sha256": "296a16a6bf28e6d3f0fb9298deba70b3cfa1d7519f4aa326e2f862bf2e63be05",
+  "dtype": "float16",
+  "max_num": 1,
+  "hard_confidence_threshold": 0.4,
+  "selective_confidence_ceiling": 0.6,
+  "escalate_region_mixed": true,
+  "escalate_ambiguous_glyphs": true,
+  "noisy_character_ratio_threshold": 0.34,
+  "noisy_character_min_length": 3,
+  "max_candidate_fraction": 0.4
+}

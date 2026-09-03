@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "mode": "audit_only",
+  "min_distinct_frames": 20,
+  "min_video_frame_fraction": 0.05,
+  "bbox_bin_size": 0.05,
+  "max_short_text_characters": 16,
+  "top_band_max_center_y": 0.30,
+  "top_right_min_center_x": 0.75,
+  "max_corner_width": 0.25,
+  "max_corner_height": 0.20,
+  "max_tiny_text_characters": 3,
+  "max_tiny_area_fraction": 0.015,
+  "protect_bottom_min_y": 0.62,
+  "protect_bottom_min_width": 0.18
+}

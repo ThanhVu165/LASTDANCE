@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "package": {
+    "name": "easyocr",
+    "version": "1.7.2",
+    "wheel_filename": "easyocr-1.7.2-py3-none-any.whl",
+    "wheel_size_bytes": 2870178,
+    "wheel_sha256": "5be12f9b0e595d443c9c3d10b0542074b50f0ec2d98b141a109cd961fd1c177c",
+    "pypi_source": "https://pypi.org/project/easyocr/1.7.2/",
+    "upstream_repository": "https://github.com/JaidedAI/EasyOCR",
+    "upstream_revision": "c4f3cd7225efd4f85451bd8b4a7646ae9a092420"
+  },
+  "runtime": {
+    "languages": [
+      "vi",
+      "en"
+    ],
+    "detect_network": "craft",
+    "recognition_network": "latin_g2",
+    "download_enabled": false
+  },
+  "models": {
+    "craft": {
+      "role": "detector",
+      "archive_filename": "craft_mlt_25k.zip",
+      "archive_url": "https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip",
+      "archive_size_bytes": 77251756,
+      "archive_sha256": "8dc6a1c703a89ed56308ef742d26ebd45c656248cbbbda6e7fe60e569f873e65",
+      "weights_filename": "craft_mlt_25k.pth",
+      "weights_size_bytes": 83152330,
+      "weights_sha256": "4a5efbfb48b4081100544e75e1e2b57f8de3d84f213004b14b85fd4b3748db17",
+      "weights_md5_upstream": "2f8227d2def4037cdb3b34389dcf9ec1"
+    },
+    "latin_g2": {
+      "role": "recognizer",
+      "archive_filename": "latin_g2.zip",
+      "archive_url": "https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/latin_g2.zip",
+      "archive_size_bytes": 14284936,
+      "archive_sha256": "29f1920c493378da65a59793fb70e7e190504662b6bed57ab26f4067eb5f3769",
+      "weights_filename": "latin_g2.pth",
+      "weights_size_bytes": 15406141,
+      "weights_sha256": "aaa95be1c4a9cb3496879bed7c520886ce1164f89e026f0c54488394e74e8c55",
+      "weights_md5_upstream": "469869130aad1a34e8f9086f4262bc59"
+    }
+  }
+}

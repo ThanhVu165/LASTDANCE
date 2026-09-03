@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "model_id": "gemini-3.1-flash-lite",
+  "media_resolution": "MEDIA_RESOLUTION_MEDIUM",
+  "max_paid_frames": 20000,
+  "max_budget_vnd": 400000,
+  "retry_reserve_fraction": 0.15,
+  "usd_to_vnd": 26300,
+  "batch_input_usd_per_million_tokens": 0.125,
+  "batch_output_usd_per_million_tokens": 0.75,
+  "embedding_reuse_threshold": 0.98,
+  "craft_layout_reuse_threshold": 0.98,
+  "crop_ssim_reuse_threshold": 0.98,
+  "crop_phash_reuse_max_distance": 2
+}

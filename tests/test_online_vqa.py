@@ -1,0 +1,46 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from PIL import Image
+
+from offline.config import DataLayout
+from online.artifacts import ArtifactRegistry, CatalogFrame, FrameCatalog
+from online.config import OnlineLayout
+from online.vqa import QwenVQAAnswerer
+from shared.schemas.online import FrameEvidence
+
+
+class OnlineVqaTests(unittest.TestCase):
+    def test_contact_sheet_is_one_six_panel_chronological_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            layout = OnlineLayout(DataLayout(Path(directory)))
+            frames = []
+            evidence = []
+            for index in range(6):
+                frame = CatalogFrame(index + 1, "v1", index, index * 10, float(5 - index), f"s{index}")
+                frames.append(frame)
+                image_path = frame.image_path(layout.data.keyframes)
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (320, 180), (index * 20, 40, 80)).save(image_path)
+                evidence.append(
+                    FrameEvidence(
+                        keyframe_uid=frame.keyframe_uid,
+                        video_id=frame.video_id,
+                        frame_id=frame.frame_id,
+                        pts_time=frame.pts_time,
+                        shot_id=frame.shot_id,
+                    )
+                )
+            catalog = FrameCatalog(frames, sha256="catalog")
+            registry = ArtifactRegistry(layout=layout, catalog=catalog, visual={}, statuses={})
+            sheet, included = QwenVQAAnswerer(registry)._contact_sheet(evidence)
+            try:
+                self.assertEqual(sheet.size, (672, 496))
+                self.assertEqual([item.pts_time for item in included], sorted(item.pts_time for item in evidence))
+            finally:
+                sheet.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

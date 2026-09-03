@@ -1,0 +1,6 @@
+# Complete local-CPU environment for inventory, shot detection, filtering and index build.
+-r index.txt
+-r shot-transnetv2.txt
+
+# Shared HF Dataset artifact upload/pull and pinned-revision round-trip verification.
+huggingface-hub==1.21.0

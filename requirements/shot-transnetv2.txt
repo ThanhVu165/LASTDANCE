@@ -1,0 +1,7 @@
+-r base.txt
+
+# Modern Python 3.11-compatible inference path. The upstream TensorFlow 2.1 environment
+# is deliberately excluded from the main environment.
+torch==2.12.1
+transnetv2-pytorch==1.0.5
+ffmpeg-python==0.2.0
