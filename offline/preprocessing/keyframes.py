@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterable, Sequence
@@ -74,7 +75,7 @@ def probe_frame_timestamps(
         if value in (None, "", "N/A"):
             raise RuntimeError(f"frame {frame_index} has no usable timestamp")
         timestamp = float(value)
-        if timestamp < 0:
+        if not math.isfinite(timestamp) or timestamp < 0:
             raise RuntimeError(f"frame {frame_index} has a negative timestamp")
         if timestamps and timestamp < timestamps[-1]:
             raise RuntimeError("frame timestamps must be monotonic")

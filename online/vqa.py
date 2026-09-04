@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import base64
-import difflib
+import unicodedata
 import io
 import math
 import os
@@ -13,7 +13,7 @@ from typing import Any, Sequence
 
 from PIL import Image, ImageDraw, ImageOps
 
-from shared.schemas.online import FrameEvidence
+from shared.schemas.online import FrameEvidence, AnswerResult
 
 from .artifacts import ArtifactRegistry
 from .config import OnlineConfig
@@ -22,43 +22,55 @@ from .qwen_runtime import get_qwen_components
 from .task_heads import UnavailableAnswerer, VideoAnswerer
 
 
-def _json_answer(text: str) -> tuple[str, float]:
-    start, end = text.find("{"), text.rfind("}")
-    if start >= 0 and end > start:
-        try:
-            payload = json.loads(text[start : end + 1])
-            answer = str(payload.get("answer", "")).strip()
-            confidence = float(payload.get("confidence", 0.0))
-            return answer[:100], min(1.0, max(0.0, confidence))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-    answer = re.sub(r"\s+", " ", text).strip()[:100]
-    return answer, 0.5 if answer else 0.0
-
-
 def _normalize_answer(text: str) -> str:
-    return re.sub(r"[^\w]+", " ", text.casefold()).strip()
+    return " ".join(unicodedata.normalize("NFC", text).casefold().split())
 
 
 def _answers_agree(first: str, second: str, *, threshold: float = 0.6) -> bool:
-    """Accept equivalent free-text answers without relaxing numeric agreement."""
-
-    if not 0.0 <= threshold <= 1.0:
+    # Legacy threshold stays readable; lexical similarity never proves semantics.
+    if not 0 <= threshold <= 1:
         raise ValueError("answer agreement threshold must be between 0 and 1")
-    normalized_first = _normalize_answer(first)
-    normalized_second = _normalize_answer(second)
-    if not normalized_first or not normalized_second:
-        return False
-    if normalized_first == normalized_second:
-        return True
-    first_numbers = tuple(re.findall(r"\d+", normalized_first))
-    second_numbers = tuple(re.findall(r"\d+", normalized_second))
-    if first_numbers or second_numbers:
-        return first_numbers == second_numbers
-    return (
-        difflib.SequenceMatcher(None, normalized_first, normalized_second).ratio()
-        >= threshold
-    )
+    return bool(first.strip() and second.strip() and _normalize_answer(first) == _normalize_answer(second))
+
+
+def _parse_result(payload: dict, frames: Sequence[FrameEvidence], provider: str) -> AnswerResult:
+    answer = payload.get("answer", "")
+    if not isinstance(answer, str):
+        raise ValueError("answer must be a string")
+    if not answer.strip() or _normalize_answer(answer) == "uncertain":
+        return AnswerResult(provider=provider, warnings=["No supported answer"])
+    panel = payload.get("evidence_panel")
+    frame_id = payload.get("evidence_frame_id")
+    selected = None
+    if isinstance(panel, str) and len(panel) == 1 and "A" <= panel <= "Z":
+        index = ord(panel) - ord("A")
+        if index < len(frames):
+            selected = frames[index]
+    if frame_id is not None:
+        if type(frame_id) is not int:
+            raise ValueError("evidence frame ID must be an integer")
+        match = next((f for f in frames if f.frame_id == frame_id), None)
+        if match is None or (selected is not None and selected != match):
+            raise ValueError("unknown or inconsistent answer evidence frame")
+        selected = match
+    if selected is None:
+        raise ValueError("answer has no valid evidence panel/frame")
+    return AnswerResult(answer=answer.strip(), confidence=payload.get("confidence", 0),
+                        evidence=[selected], provider=provider,
+                        value_type=payload.get("value_type", "free_text"), unit=payload.get("unit"))
+
+
+def _verified_pair(first: AnswerResult, second: AnswerResult) -> AnswerResult:
+    common = {f.keyframe_uid for f in second.evidence}
+    evidence = [f for f in first.evidence if f.keyframe_uid in common]
+    agreed = (_answers_agree(first.answer, second.answer) and first.unit == second.unit
+              and first.value_type == second.value_type and bool(evidence))
+    if not agreed:
+        return first.model_copy(update={"requires_review": True,
+                                       "warnings": [*first.warnings, *second.warnings,
+                                                    "Independent answers or evidence disagree; operator review required"]})
+    return first.model_copy(update={"evidence": evidence, "confidence": min(first.confidence, second.confidence),
+                                   "requires_review": first.value_type == "free_text"})
 
 
 class QwenVQAAnswerer(VideoAnswerer):
@@ -82,7 +94,9 @@ class QwenVQAAnswerer(VideoAnswerer):
         return self._model, self._processor
 
     def _contact_sheet(self, frames: Sequence[FrameEvidence]) -> tuple[Image.Image, list[FrameEvidence]]:
-        selected = sorted(frames, key=lambda item: (item.pts_time, item.frame_id))[:6]
+        selected = sorted(frames[:6], key=lambda item: (item.pts_time, item.frame_id))
+        if not selected:
+            raise ValueError("VQA requires evidence frames")
         panel_width = 224
         image_height = 224
         label_height = 24
@@ -97,14 +111,14 @@ class QwenVQAAnswerer(VideoAnswerer):
             if not path.is_file():
                 continue
             with Image.open(path) as source:
-                panel = ImageOps.fit(source.convert("RGB"), (panel_width, image_height), method=Image.Resampling.LANCZOS)
+                panel = ImageOps.pad(source.convert("RGB"), (panel_width, image_height), method=Image.Resampling.LANCZOS, color="white")
             slot = len(included)
             x = (slot % columns) * panel_width
             y = (slot // columns) * (image_height + label_height)
             sheet.paste(panel, (x, y))
             draw.rectangle((x, y + image_height, x + panel_width, y + image_height + label_height), fill="white")
             label = chr(ord("A") + slot)
-            draw.text((x + 4, y + image_height + 4), f"panel {label}", fill="black")
+            draw.text((x + 4, y + image_height + 4), f"panel {label} / frame {frame.frame_id}", fill="black")
             included.append(frame)
         if not included:
             sheet.close()
@@ -116,7 +130,7 @@ class QwenVQAAnswerer(VideoAnswerer):
             sheet = cropped
         return sheet, included
 
-    def _ask(self, frames: Sequence[FrameEvidence], question: str, instruction: str) -> tuple[str, float]:
+    def _ask(self, frames: Sequence[FrameEvidence], question: str, instruction: str) -> AnswerResult:
         import torch
 
         model, processor = self._load()
@@ -129,7 +143,7 @@ class QwenVQAAnswerer(VideoAnswerer):
                 "text": (
                     f"{instruction}\nPanels {panel_names} are chronological.\nQuestion: {question}\n"
                     "Use only visible evidence. Return JSON: "
-                    '{"answer":"short answer","evidence_panel":"A","confidence":0.0}.'
+                    '{"answer":"short answer","evidence_panel":"A","value_type":"number|color|person|place|free_text","unit":null,"confidence":0.0}.'
                 ),
             }
         )
@@ -153,32 +167,16 @@ class QwenVQAAnswerer(VideoAnswerer):
             )
         generated = generated[:, inputs["input_ids"].shape[1] :]
         response = processor.batch_decode(generated, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        return _json_answer(response)
+        start, end = response.find("{"), response.rfind("}")
+        return _parse_result(json.loads(response[start:end + 1]), included, "qwen")
 
-    def answer(
-        self,
-        *,
-        video_id: str,
-        frames: Sequence[FrameEvidence],
-        question: str,
-    ) -> tuple[str, float, list[str]]:
+    def answer(self, *, video_id: str, frames: Sequence[FrameEvidence], question: str) -> AnswerResult:
         try:
-            first, first_confidence = self._ask(frames, question, "Answer the question from these chronological candidate frames.")
-            second, second_confidence = self._ask(frames, question, "Independently verify the answer and reject unsupported guesses.")
+            first = self._ask(frames, question, "Answer using only the evidence for this question.")
+            second = self._ask(frames, question, "Independently verify the answer, its units, and the supporting frame.")
+            return _verified_pair(first, second)
         except Exception as error:
-            return "Uncertain", 0.0, [f"Qwen VQA failed for {video_id}: {type(error).__name__}: {error}"]
-        if not _answers_agree(
-            first,
-            second,
-            threshold=self.agreement_similarity,
-        ):
-            return "Uncertain", 0.0, [f"Qwen VQA prompts disagreed for {video_id}: {first!r} vs {second!r}"]
-        answer, confidence = (
-            (first, first_confidence)
-            if first_confidence >= second_confidence
-            else (second, second_confidence)
-        )
-        return answer[:100], min(confidence, first_confidence, second_confidence), []
+            return AnswerResult(warnings=[f"VQA failed for {video_id}: {type(error).__name__}: {error}"])
 
 
 class WorkerQwenVQAAnswerer(VideoAnswerer):
@@ -207,7 +205,7 @@ class WorkerQwenVQAAnswerer(VideoAnswerer):
         video_id: str,
         frames: Sequence[FrameEvidence],
         question: str,
-    ) -> tuple[str, float, list[str]]:
+    ) -> AnswerResult:
         payload = []
         for frame in frames:
             internal = self.registry.catalog.by_uid[frame.keyframe_uid]
@@ -222,10 +220,10 @@ class WorkerQwenVQAAnswerer(VideoAnswerer):
             agreement_similarity=self.agreement_similarity,
             frames=payload,
         )
-        return str(response["answer"]), float(response["confidence"]), [str(item) for item in response["warnings"]]
+        return AnswerResult.model_validate(response)
 
 
-class GeminiVQAAnswerer(VideoAnswerer):
+class GeminiVQAAnswerer(QwenVQAAnswerer):
     def __init__(
         self,
         registry: ArtifactRegistry,
@@ -242,7 +240,7 @@ class GeminiVQAAnswerer(VideoAnswerer):
         frames: Sequence[FrameEvidence],
         question: str,
         instruction: str,
-    ) -> tuple[str, float]:
+    ) -> AnswerResult:
         sheet, included = QwenVQAAnswerer(self.registry)._contact_sheet(frames)
         try:
             buffer = io.BytesIO()
@@ -253,7 +251,7 @@ class GeminiVQAAnswerer(VideoAnswerer):
             f"{instruction}\nQuestion: {question}\n"
             f"Allowed evidence frame IDs: {[frame.frame_id for frame in included]}\n"
             "Use only visible evidence. Return JSON with answer (maximum 100 characters), "
-            "evidence_frame_id and confidence (0..1)."
+            "evidence_frame_id, value_type (number/color/person/place/free_text), unit (or null), and confidence (0..1)."
         )
         payload = self.client.generate(
             [
@@ -267,45 +265,7 @@ class GeminiVQAAnswerer(VideoAnswerer):
             ],
             estimated_tokens=6000,
         )
-        answer = str(payload.get("answer", ""))[:100]
-        return answer, min(1.0, max(0.0, float(payload.get("confidence", 0.0))))
-
-    def answer(
-        self,
-        *,
-        video_id: str,
-        frames: Sequence[FrameEvidence],
-        question: str,
-    ) -> tuple[str, float, list[str]]:
-        try:
-            first, first_confidence = self._ask(
-                frames,
-                question,
-                "Answer the question from these chronological candidate frames.",
-            )
-            second, second_confidence = self._ask(
-                frames,
-                question,
-                "Independently verify the answer and reject unsupported guesses.",
-            )
-        except Exception as error:
-            return "Uncertain", 0.0, [
-                f"Gemini VQA failed for {video_id}: {type(error).__name__}: {error}"
-            ]
-        if not _answers_agree(
-            first,
-            second,
-            threshold=self.agreement_similarity,
-        ):
-            return "Uncertain", 0.0, [
-                f"Gemini VQA prompts disagreed for {video_id}: {first!r} vs {second!r}"
-            ]
-        answer, confidence = (
-            (first, first_confidence)
-            if first_confidence >= second_confidence
-            else (second, second_confidence)
-        )
-        return answer[:100], min(confidence, first_confidence, second_confidence), []
+        return _parse_result(payload, included, "gemini")
 
 
 class FallbackVQAAnswerer(VideoAnswerer):
@@ -318,34 +278,23 @@ class FallbackVQAAnswerer(VideoAnswerer):
         self.providers = list(providers)
         self.accept_confidence = accept_confidence
 
-    def answer(
-        self,
-        *,
-        video_id: str,
-        frames: Sequence[FrameEvidence],
-        question: str,
-    ) -> tuple[str, float, list[str]]:
-        warnings: list[str] = []
-        best_answer = "Uncertain"
-        best_confidence = 0.0
+    def answer(self, *, video_id: str, frames: Sequence[FrameEvidence], question: str) -> AnswerResult:
+        warnings = []
+        best = AnswerResult()
         for provider in self.providers:
-            answer, confidence, provider_warnings = provider.answer(
-                video_id=video_id,
-                frames=frames,
-                question=question,
-            )
-            warnings.extend(provider_warnings)
-            if answer.strip().casefold() != "uncertain" and confidence > 0:
-                if best_answer != "Uncertain" and _normalize_answer(answer) == _normalize_answer(best_answer):
-                    return answer, max(confidence, best_confidence), warnings
-                if confidence > best_confidence:
-                    best_answer, best_confidence = answer, confidence
-                if confidence >= self.accept_confidence:
-                    return answer, confidence, warnings
-        if best_answer != "Uncertain":
-            warnings.append("Low-confidence answer kept for operator review after fallback verification")
-            return best_answer, best_confidence, warnings
-        return "Uncertain", 0.0, warnings or ["VQA unavailable; answer requires operator review"]
+            try:
+                result = AnswerResult.model_validate(provider.answer(video_id=video_id, frames=frames, question=question))
+            except Exception as error:
+                warnings.append(f"Answer provider failed: {error}")
+                continue
+            warnings.extend(result.warnings)
+            if not result.answer.strip():
+                continue
+            if result.confidence > best.confidence:
+                best = result
+            if not result.requires_review and result.confidence >= self.accept_confidence:
+                return result.model_copy(update={"warnings": warnings})
+        return best.model_copy(update={"requires_review": True, "warnings": warnings})
 
 
 def get_video_answerer(

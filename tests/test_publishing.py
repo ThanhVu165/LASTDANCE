@@ -12,7 +12,7 @@ class PublishingCriteriaTests(unittest.TestCase):
     def test_embedding_and_publishing_modality_contracts_match(self):
         self.assertEqual(REQUIRED_VISUAL_INDEXES, SUPPORTED_MODALITIES)
 
-    def test_video_is_complete_only_when_all_criteria_pass(self):
+    def test_boolean_claims_without_artifact_proofs_cannot_mark_complete(self):
         healthy = VectorHealth(finite=True, normalized=True)
         report = assess_publishing_readiness(
             video_id="L01_V001",
@@ -26,8 +26,8 @@ class PublishingCriteriaTests(unittest.TestCase):
             mapping_verified=True,
             checkpoint_resume_verified=True,
         )
-        self.assertTrue(report.complete)
-        self.assertTrue(report.as_state()["complete"])
+        self.assertFalse(report.complete)
+        self.assertFalse(report.as_state()["complete"])
 
     def test_missing_index_id_and_bad_norm_fail_closed(self):
         report = assess_publishing_readiness(

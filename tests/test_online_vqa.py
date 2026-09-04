@@ -12,14 +12,34 @@ from shared.schemas.online import FrameEvidence
 
 
 class OnlineVqaTests(unittest.TestCase):
-    def test_fuzzy_agreement_accepts_equivalent_unknown_answers(self):
-        self.assertTrue(_answers_agree("Không xác định được", "Chưa xác định được"))
+    def test_lexical_similarity_does_not_authorize_unknown_answers(self):
+        self.assertFalse(_answers_agree("Không xác định được", "Chưa xác định được"))
 
     def test_fuzzy_agreement_rejects_different_numbers(self):
         self.assertFalse(_answers_agree("3 chiếc bánh", "5 chiếc bánh"))
 
     def test_fuzzy_agreement_rejects_different_colors(self):
         self.assertFalse(_answers_agree("đỏ", "xanh"))
+
+    def test_contact_sheet_preserves_information_at_image_borders(self):
+        with tempfile.TemporaryDirectory() as directory:
+            layout = OnlineLayout(DataLayout(Path(directory)))
+            frame = CatalogFrame(1, "v1", 0, 0, 0., "s0")
+            path = frame.image_path(layout.data.keyframes)
+            path.parent.mkdir(parents=True)
+            image = Image.new("RGB", (400, 100), "blue")
+            image.paste("red", (0, 0, 40, 100))
+            image.paste("green", (360, 0, 400, 100))
+            image.save(path)
+            registry = ArtifactRegistry(layout=layout, catalog=FrameCatalog([frame], sha256="test"), visual={}, statuses={})
+            evidence = FrameEvidence(keyframe_uid=1, video_id="v1", frame_id=0, pts_time=0., shot_id="s0")
+            sheet, _ = QwenVQAAnswerer(registry)._contact_sheet([evidence])
+            try:
+                self.assertGreater(sheet.getpixel((5, 112))[0], 200)
+                self.assertGreater(sheet.getpixel((218, 112))[1], 80)
+                self.assertEqual(sheet.getpixel((112, 5)), (255, 255, 255))
+            finally:
+                sheet.close()
 
     def test_contact_sheet_is_one_six_panel_chronological_image(self):
         with tempfile.TemporaryDirectory() as directory:

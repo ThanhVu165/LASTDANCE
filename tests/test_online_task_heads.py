@@ -6,7 +6,7 @@ from online.ranking import apply_clip_tie_break, rank_videos
 from online.engine import merge_kis_anchor_frames
 from online.task_heads import build_kis_candidates, build_qa_candidates, build_trake_candidates
 from online.retrieval import RetrievalResult
-from shared.schemas.online import FrameEvidence, UnifiedQueryPlan, VideoHypothesis
+from shared.schemas.online import AnswerResult, FrameEvidence, UnifiedQueryPlan, VideoHypothesis
 
 
 def frame(video: str, frame_id: int, pts_time: float, score: float, shot: str) -> FrameEvidence:
@@ -190,7 +190,7 @@ class OnlineTaskHeadTests(unittest.TestCase):
 
             def answer(self, *, video_id, frames, question):
                 self.calls.append(video_id)
-                return "42", 0.9, []
+                return AnswerResult(answer="42", confidence=0.9, evidence=frames[:1])
 
         hypotheses = [
             VideoHypothesis(
@@ -223,14 +223,14 @@ class OnlineTaskHeadTests(unittest.TestCase):
         self.assertTrue(all(item.answer == "42" for item in candidates))
         self.assertTrue(all(item.requires_review for item in candidates))
 
-    def test_qa_builds_top_100_from_up_to_forty_frames_per_answered_video(self):
+    def test_qa_only_emits_frames_with_answer_evidence(self):
         class Answerer:
             def __init__(self):
                 self.context_sizes = []
 
             def answer(self, *, video_id, frames, question):
                 self.context_sizes.append(len(frames))
-                return "42", 0.9, []
+                return AnswerResult(answer="42", confidence=0.9, evidence=frames[:1])
 
         hypotheses = [
             VideoHypothesis(
@@ -262,11 +262,8 @@ class OnlineTaskHeadTests(unittest.TestCase):
             config=OnlineConfig(),
         )
         self.assertEqual(answerer.context_sizes, [40, 40, 40])
-        self.assertEqual(len(candidates), 100)
-        counts = [sum(item.video_id == video for item in candidates) for video in ("v1", "v2", "v3")]
-        self.assertEqual(sum(counts), 100)
-        self.assertGreaterEqual(counts[0], 30)
-        self.assertTrue(all(0 < count <= 40 for count in counts))
+        self.assertEqual(len(candidates), 3)
+        self.assertEqual({item.frame_id for item in candidates}, {1000, 2000, 3000})
 
     def test_trake_beam_enforces_same_video_and_increasing_time(self):
         first = RetrievalResult(

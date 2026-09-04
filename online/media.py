@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import re
+from pathlib import Path, PureWindowsPath, PurePosixPath
 
 from .artifacts import ArtifactRegistry
 
@@ -19,6 +20,8 @@ def evidence_image(registry: ArtifactRegistry, keyframe_uid: int) -> Path | None
 def source_video(registry: ArtifactRegistry, video_id: str) -> Path | None:
     """Resolve the inventory path; never infer FPS or source frame numbers."""
 
+    if re.fullmatch(r"[A-Za-z0-9_-]+", video_id) is None:
+        raise ValueError("unsafe video identifier")
     inventory = registry.layout.data.index / "inventory.json"
     if inventory.is_file():
         payload = json.loads(inventory.read_text(encoding="utf-8"))
@@ -26,6 +29,9 @@ def source_video(registry: ArtifactRegistry, video_id: str) -> Path | None:
             if row.get("video_id") != video_id:
                 continue
             value = str(row.get("relative_path", "")).strip()
+            if (PureWindowsPath(value).drive or PureWindowsPath(value).is_absolute()
+                    or PurePosixPath(value).is_absolute() or ".." in value.replace("\\", "/").split("/")):
+                raise ValueError("inventory source path must be relative without traversal")
             candidate = registry.layout.data.root / value
             if value and candidate.is_file():
                 return candidate

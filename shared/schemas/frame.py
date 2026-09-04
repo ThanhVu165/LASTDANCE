@@ -14,7 +14,7 @@ class FrameRecord(BaseModel):
     key shared by FAISS, OCR, and ASR artifacts.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     video_id: str
     local_idx: int = Field(ge=0)
@@ -40,3 +40,12 @@ class FrameRecord(BaseModel):
         if not normalized:
             raise ValueError("window_id must be null or non-empty")
         return normalized
+
+
+class VerifiedFrameRef(BaseModel):
+    """Source-video frame without a synthetic retrieval UID."""
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    video_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
+    frame_id: int = Field(ge=0, strict=True)
+    pts_time: float = Field(ge=0)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

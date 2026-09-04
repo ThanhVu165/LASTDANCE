@@ -1,4 +1,7 @@
 import sqlite3
+import json
+from offline.asr_validation import validate_asr_bundle
+from offline.artifacts import sha256_file
 import tempfile
 import unittest
 from datetime import UTC, datetime
@@ -84,6 +87,26 @@ class AsrSnapshotTests(unittest.TestCase):
                     output_root=root / "snapshots",
                     created_utc=datetime(2026, 9, 4, tzinfo=UTC),
                 )
+
+    def test_legacy_silence_is_readable_but_forged_coverage_and_wrong_catalog_fail(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            catalog, frame = self._catalog(root)
+            envelope = AsrRecordEnvelope(batch_id="batch-01", video_id="v1", status="silent",
+                engine="whisper_large_v3", audio_path="audio/v1.flac", duration_seconds=3)
+            destination, manifest = build_asr_snapshot(catalog_path=catalog, records=[envelope], output_root=root / "snapshots")
+            self.assertEqual(manifest.covered_videos, 0)
+            self.assertEqual(manifest.unverified_silent_videos, 1)
+            arguments = {"catalog_sha256": sha256_file(catalog), "frames": {frame.keyframe_uid: frame}}
+            validate_asr_bundle(destination / "asr.sqlite", destination / "coverage.json", **arguments)
+            with self.assertRaisesRegex(ValueError, "catalog"):
+                validate_asr_bundle(destination / "asr.sqlite", destination / "coverage.json",
+                                    catalog_sha256="0" * 64, frames=arguments["frames"])
+            forged = manifest.model_dump(mode="json")
+            forged["videos"]["v1"]["coverage_fraction"] = 1.0
+            (destination / "coverage.json").write_text(json.dumps(forged), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "false complete"):
+                validate_asr_bundle(destination / "asr.sqlite", destination / "coverage.json", **arguments)
 
     def test_rejects_foreign_video_before_snapshot_publish(self):
         with tempfile.TemporaryDirectory() as temporary:

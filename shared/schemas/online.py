@@ -8,6 +8,7 @@ import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from .frame import VerifiedFrameRef
 
 
 class TaskType(str, Enum):
@@ -22,7 +23,7 @@ _QUERY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*-(kis|qa|trake)$", re.IGNO
 class QuerySpec(BaseModel):
     """One official AIC26 qualifier query and its required submission filename."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     query_name: str
     source_filename: str
@@ -71,7 +72,7 @@ class ArtifactAvailability(str, Enum):
 
 
 class ArtifactStatus(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     name: str
     availability: ArtifactAvailability
@@ -90,7 +91,7 @@ class QueryRole(str, Enum):
 class QueryUnit(BaseModel):
     """One grounded query span with one or more retrieval/task roles."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     unit_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     description_original: str
@@ -128,7 +129,7 @@ class QueryUnit(BaseModel):
 class AnswerTarget(BaseModel):
     """A value that QA must extract, never a known literal for FTS search."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     question: str
     value_type: Literal["number", "color", "person", "place", "free_text"] = "free_text"
@@ -151,7 +152,7 @@ class AnswerTarget(BaseModel):
 
 
 class UnifiedQueryPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     raw_query: str
     global_context_en: str = ""
@@ -398,7 +399,7 @@ class UnifiedQueryPlan(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     task_type: TaskType
     raw_query: str
@@ -425,7 +426,7 @@ class SearchRequest(BaseModel):
 
 
 class FrameEvidence(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     keyframe_uid: int = Field(gt=0)
     video_id: str
@@ -446,8 +447,31 @@ class FrameEvidence(BaseModel):
     model_consensus: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
+class AnswerResult(BaseModel):
+    """An answer attached only to the frames that support it."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    answer: str = Field(default="", max_length=100)
+    value_type: Literal["number", "color", "person", "place", "free_text"] = "free_text"
+    unit: str | None = None
+    evidence: list[FrameEvidence] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    requires_review: bool = True
+    provider: str = "unavailable"
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def grounded(self) -> "AnswerResult":
+        if self.answer.strip() and not self.evidence:
+            raise ValueError("nonempty QA answer requires explicit frame evidence")
+        if len({(f.video_id, f.frame_id) for f in self.evidence}) != len(self.evidence):
+            raise ValueError("duplicate QA evidence frame")
+        if len({f.video_id for f in self.evidence}) > 1:
+            raise ValueError("QA evidence must belong to one video")
+        return self
+
+
 class VideoHypothesis(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     video_id: str
     video_score: float
@@ -463,30 +487,32 @@ class VideoHypothesis(BaseModel):
 
 
 class KISCandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     candidate_type: Literal["KIS"] = "KIS"
     video_id: str
-    frame_id: int = Field(ge=0)
+    frame_id: int = Field(ge=0, strict=True)
     score: float
     evidence: FrameEvidence
+    verified_frame: VerifiedFrameRef | None = None
 
 
 class QACandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     candidate_type: Literal["QA"] = "QA"
     video_id: str
-    frame_id: int = Field(ge=0)
+    frame_id: int = Field(ge=0, strict=True)
     answer: str = Field(max_length=100)
     score: float
     confidence: float = Field(ge=0.0, le=1.0)
     requires_review: bool = True
     evidence: FrameEvidence
+    verified_frame: VerifiedFrameRef | None = None
 
 
 class TrakeCandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     candidate_type: Literal["TRAKE"] = "TRAKE"
     video_id: str
@@ -494,11 +520,23 @@ class TrakeCandidate(BaseModel):
     pts_times: list[float] = Field(min_length=2)
     score: float
     evidence: list[FrameEvidence]
+    verified_frames: list[VerifiedFrameRef | None] = Field(default_factory=list)
+
+    @field_validator("frame_ids", mode="before")
+    @classmethod
+    def _strict_frame_ids(cls, values):
+        if not isinstance(values, (list, tuple)) or any(type(value) is not int or value < 0 for value in values):
+            raise ValueError("TRAKE frame IDs must be nonnegative integers")
+        return values
 
     @model_validator(mode="after")
     def _validate_sequence(self) -> "TrakeCandidate":
         if len(self.frame_ids) != len(self.pts_times) or len(self.frame_ids) != len(self.evidence):
             raise ValueError("TRAKE frame_ids, pts_times and evidence must align")
+        if any(type(value) is not int or value < 0 for value in self.frame_ids):
+            raise ValueError("TRAKE frame IDs must be nonnegative integers")
+        if self.verified_frames and len(self.verified_frames) != len(self.frame_ids):
+            raise ValueError("TRAKE verified frames must align with events")
         if len(set(self.frame_ids)) != len(self.frame_ids):
             raise ValueError("TRAKE must not reuse a frame")
         if any(right <= left for left, right in zip(self.pts_times, self.pts_times[1:])):
@@ -513,7 +551,7 @@ TaskCandidate = Annotated[
 
 
 class SearchRun(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     request: SearchRequest
     query_plan: UnifiedQueryPlan

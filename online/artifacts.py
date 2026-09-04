@@ -15,6 +15,7 @@ import numpy as np
 from offline.artifacts import sha256_file
 from offline.ocr_snapshot import OcrSnapshotManifest
 from offline.ocr_snapshot_hf import validate_local_snapshot_for_publish
+from shared.schemas.frame import FrameRecord
 from shared.schemas.online import ArtifactAvailability, ArtifactStatus
 
 from .config import OnlineLayout
@@ -149,7 +150,7 @@ class ArtifactRegistry:
                 detail=f"dim={handle.dimension} revision={handle.state['model']['revision']}",
             )
         statuses["ocr"] = _inspect_ocr(layout, catalog)
-        statuses["asr"] = _inspect_fts(layout.asr, "asr", catalog)
+        statuses["asr"] = _inspect_asr(layout.asr, catalog)
         return cls(layout=layout, catalog=catalog, visual=visual, statuses=statuses)
 
 
@@ -169,6 +170,7 @@ def _load_catalog(layout: OnlineLayout) -> FrameCatalog:
         if reader.fieldnames != required:
             raise RuntimeError("frames.csv columns do not match the baseline")
         for row in reader:
+            FrameRecord.model_validate({**row, "window_id": row["window_id"] or None})
             frames.append(
                 CatalogFrame(
                     keyframe_uid=int(row["keyframe_uid"]),
@@ -350,3 +352,20 @@ def _inspect_ocr(layout: OnlineLayout, catalog: FrameCatalog) -> ArtifactStatus:
             "integrity=ok; UID joins=valid; production_ready=false"
         ),
     )
+
+
+def _inspect_asr(path: Path, catalog: FrameCatalog) -> ArtifactStatus:
+    from offline.asr_validation import validate_asr_bundle
+    if not path.is_file():
+        return _inspect_fts(path, "asr", catalog)
+    try:
+        manifest = validate_asr_bundle(path, path.with_name("asr.coverage.json"),
+                                      catalog_sha256=catalog.sha256, frames=catalog.by_uid)
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        return ArtifactStatus(name="asr", availability=ArtifactAvailability.INVALID,
+                              path=str(path), detail=f"ASR coverage invalid: {exc}")
+    return ArtifactStatus(name="asr", availability=ArtifactAvailability.READY, path=str(path),
+                          record_count=manifest.fts_rows,
+                          detail=f"coverage={manifest.coverage_fraction:.2%}; errors={manifest.error_videos}; "
+                          f"missing={manifest.missing_videos}; unverified_silence={manifest.unverified_silent_videos}; "
+                          "production_ready=false; per-video coverage and checksum validated")

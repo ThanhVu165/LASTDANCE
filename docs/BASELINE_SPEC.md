@@ -481,7 +481,7 @@ class AsrSegment(BaseModel):
     keyframe_uid_nearest: int
 ```
 
-Invariant: identifier/text không rỗng, timestamp không âm, `end_time >= start_time`, và
+Invariant: identifier/text không rỗng, timestamp hữu hạn và không âm, `end_time >= start_time`, và
 `keyframe_uid_nearest` là signed-int64 dương tồn tại trong `frames.csv`.
 
 ```sql
@@ -514,6 +514,15 @@ Một video chỉ được đánh dấu ASR complete khi:
 - [ ] Mọi `keyframe_uid_nearest` tồn tại trong `frames.csv` của cùng video.
 - [ ] `asr.sqlite` build FTS5 thành công và query mẫu trả đúng kết quả.
 - [ ] Coverage report không đánh dấu hoàn tất cho checkpoint dở dang.
+
+Envelope Kaggle v1 tiếp tục được đọc. `silent` không có `silence_verification` vẫn đọc được
+để audit, nhưng `verified_complete=false`, `unverified_silent_videos` tăng và coverage video
+bằng 0. Verification gồm audio SHA-256, người review và đường dẫn evidence tương đối; hash
+phải khớp audio. Không đổi inference rỗng thành bằng chứng im lặng. Segment không vượt duration.
+SQLite và `asr.coverage.json` phải khớp checksum/size, catalog SHA, số dòng và trạng thái từng
+video, UID cùng video và nearest-PTS alignment. Online từ chối cặp file chưa đồng bộ; sidecar
+không có hoặc sai thì ASR INVALID, visual vẫn hoạt động. `--allow-partial` chỉ phục vụ development;
+không nâng `production_ready`. Snapshot ASR giữ bất biến và `complete=false`.
 
 Online chỉ tăng trọng số ASR khi `UnifiedQueryPlan.spoken_text` không rỗng. Video thiếu
 ASR coverage phải hiện rõ để thí sinh dùng human-in-the-loop, không im lặng diễn giải kết
@@ -802,6 +811,15 @@ answer thật mới thành `QACandidate`. `Uncertain`, answer rỗng, quá 100 k
 `requires_review=true` bị bulk-add/workspace export chặn; operator chọn và xác minh thủ công
 sẽ hạ cờ review.
 
+`VideoAnswerer.answer()` trả `AnswerResult` gồm answer, value_type, unit, evidence frame,
+confidence, requires_review, provider và warnings. Mỗi row QA chỉ dùng frame do answerer
+chỉ ra (panel A–F hoặc source frame ID có trong context), không broadcast một đáp án sang
+mọi frame của video. Hai lần hỏi chỉ auto-confirm khi answer/type/unit khớp chính xác sau
+NFC/case/whitespace normalization và có chung evidence; free text vẫn cần review. Similarity
+ký tự không phải semantic agreement. OCR/ASR numeric extraction phải ràng buộc theo câu hỏi,
+trường hợp nhiều giá trị hoặc không rõ thì abstain. Contact sheet letterbox toàn ảnh.
+UI vẫn có form QA thủ công cho video chưa có answer; thay frame/answer phải xác nhận lại.
+
 #### TRAKE
 
 Chỉ unit trong `ordered_event_ids` chạy event retrieval độc lập; locator context chạy một
@@ -812,7 +830,10 @@ lượt riêng để rank video và không tham gia Beam Search. Video score:
 + 0.20 × weakest_event + 0.10 × mean_event + 0.10 × model_consensus
 ```
 
-Mỗi moment/video giữ Top 32 frame khác shot. Beam width 8, chỉ mở rộng frame cùng video,
+Mỗi moment/video dedup theo `(video_id, frame_id)`, giữ các frame khác nhau trong cùng shot.
+Không cắt Top 32 trước khi kiểm tra tính khả thi của chuỗi; loại frame không có suffix hợp lệ
+trước khi cắt beam. `trake_frame_top_k` được đọc để tương thích config cũ, không còn cắt pool.
+Beam width 8, chỉ mở rộng frame cùng video,
 `pts_time` tăng nghiêm ngặt và không lặp frame. `trake_decay=0.0` mặc định để không phạt
 khoảng cách thời gian chưa được ground-truth calibrate. Sequence phải đủ đúng
 `expected_event_count`; UI cho thay neighbor nhưng vẫn validate thứ tự.
@@ -834,7 +855,10 @@ UI kết quả có hai tab:
 
 Search không tự thêm vào draft. Bulk-add là atomic và task-aware; nếu draft đã có dữ liệu,
 operator chọn replace hoặc merge-fill/dedup. Workspace tách theo `query_name`, giới hạn 100
-row riêng từng query và lưu atomic history/provenance ngoài submission ZIP.
+row riêng từng query và lưu atomic history/provenance ngoài submission ZIP. Merge vào draft
+đủ 100 dòng giữ nguyên thứ tự hiện có. Cả ba task có điều khiển source frame ±1/5/10 và dải
+21 frame liên tiếp (cắt ở biên video), một lượt FFmpeg decode. Source verification chạy CPU;
+cache gắn SHA-256 video và được kiểm tra lại trước ZIP, không tiêu quota GPU.
 
 ### 3.10 Submission profile duy nhất
 
@@ -845,11 +869,34 @@ Profile duy nhất là `AIC26_QUALIFIER_OFFICIAL`:
 - KIS: `video_id,frame_id`;
 - QA: `video_id,frame_id,answer`, answer tối đa 100 ký tự, CSV quoting chuẩn và giữ Unicode;
 - TRAKE: `video_id,frame_id_1,...,frame_id_N`, đúng N event, cùng video, timestamp tăng;
-- cấm `.mp4`, `local_idx`, path, score, duplicate hoặc frame ngoài `frames.csv`.
+- cấm `.mp4`, `local_idx`, path, score và duplicate;
+- frame thuộc `frames.csv` dùng mapping catalog đã validate; frame ngoài catalog bắt buộc
+  có `VerifiedFrameRef(video_id, frame_id, pts_time, source_sha256)` trong workspace.
+  `frame_id` là số thứ tự decoded frame, `pts_time` lấy từ ffprobe từng frame, không tính
+  bằng FPS trung bình. Verifier kiểm tra giới hạn frame và fingerprint MP4; source thiếu,
+  đổi nội dung hoặc timestamp không khớp thì chặn export. Metadata xác thực nằm ngoài CSV/ZIP.
+  Không tạo `keyframe_uid` mới cho source frame; retrieval evidence vẫn trỏ UID gốc.
 
 ZIP phải chứa đủ và chỉ đủ `submission/<query_name>.csv`. Exporter bắt buộc serialize → đọc
 lại/validate CSV bytes → tạo ZIP → mở lại/validate entry và byte content → hiển thị row count
 và SHA-256. CSV riêng chỉ để inspection; ZIP PASS mới là file nộp chính thức.
+
+---
+
+### 3.11 Qualifier evaluation và acceptance
+
+`shared/evaluation.py` chấm theo thông tin vòng sơ tuyển đã cung cấp: với từng dòng, KIS
+được 1 khi đúng video và frame nằm trong interval; QA thêm điều kiện answer thuộc tập alias
+ngữ nghĩa đã được người gán nhãn duyệt; TRAKE được tỷ lệ event nằm trong interval tương ứng
+khi đúng video. `R@k = max(row_score[:k])`, `k ∈ {1,5,20,50,100}`; Final Score là trung bình
+năm R@k. Tối đa 100 dòng; bộ chấm giữ nguyên thứ tự nộp.
+
+Acceptance cần 60 câu có người xác minh: 20 KIS, 20 QA, 20 TRAKE; development 30 và held-out
+30, mỗi loại 10/split, không trùng video giữa hai split. Query cũ chỉ dùng regression. Chọn
+config/ablation trên development, khóa hash config và bộ nhãn rồi mới chạy held-out. Báo cáo
+phải phân biệt Final Score, video recall, catalog event support, khoảng lệch frame, latency
+và tỷ lệ query cần operator review. Phiếu gán nhãn trống và unit test không phải ground truth.
+Lệnh và tình trạng thực nghiệm: `docs/QUALIFIER_ACCEPTANCE_RUNBOOK.md`.
 
 ---
 
@@ -919,6 +966,15 @@ accuracy phải gắn bộ query/ground truth, revision/config và metric tái l
 ---
 
 ## Changelog
+
+- **04/09/2026 — qualifier audit theo plan đã được người dùng duyệt:** cho phép source frame
+  đã xác thực ngoài catalog; giữ retrieval UID; QA structured evidence và review; TRAKE giữ
+  frame cùng shot và kiểm tra suffix trước beam. Thêm evaluator R-Score/Final Score, khóa
+  development/held-out, finite timestamps và guard inventory smoke. Publishing cần manifest
+  Shot/checkpoint/log/mapping bound artifact, không chấp nhận chỉ cờ true. Consumer ASR đọc
+  legacy v1 nhưng không coi silent chưa xác minh là complete. Theo chỉ đạo bổ sung cùng phiên,
+  job Kaggle ASR đang chạy được giữ nguyên, chờ hoàn thành mới tải HF; OCR tạm bỏ qua vì sắp
+  thay artifact. Các sửa runtime/partition ASR và kiểm chứng GPU chưa được thực hiện trong đợt này.
 
 - **23/08/2026** — Chốt baseline hợp nhất: bỏ mean-pooling shot-level làm index chính, bỏ
   RunPod/BLIP-2 khỏi critical path, đổi OCR fallback từ PARSeq-Ti sang EasyOCR, thêm 3 lớp

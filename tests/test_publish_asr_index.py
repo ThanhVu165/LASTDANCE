@@ -17,7 +17,7 @@ class PublishAsrIndexTests(unittest.TestCase):
         try:
             frame = FrameRecord(video_id="v1", local_idx=0, frame_id=0, pts_time=0.0,
                                 shot_id="s1", keyframe_uid=make_keyframe_uid("v1", "s1", 0))
-            catalog = root / "frames.csv"
+            catalog = root / "data" / "index" / "frames.csv"
             write_frames_catalog_atomic(catalog, records=[frame], sources=[{
                 "video_id": "v1", "plan_sha256": "x", "quality_sha256": "x",
                 "quality_config_signature": "x"
@@ -35,7 +35,9 @@ class PublishAsrIndexTests(unittest.TestCase):
                 output_root=root / "snapshots",
                 source_paths=[source],
             )
-            output = publish_asr_index(destination, data_root=root / "data")
+            with self.assertRaisesRegex(RuntimeError, "unverified"):
+                publish_asr_index(destination, data_root=root / "data")
+            output = publish_asr_index(destination, data_root=root / "data", allow_partial=True)
             self.assertTrue(output.is_file())
             self.assertTrue((root / "data" / "index" / "asr.coverage.json").is_file())
         finally:

@@ -74,10 +74,10 @@ class OnlineFtsTests(unittest.TestCase):
                 connection.commit()
             finally:
                 connection.close()
-            neighbor = SimpleNamespace(keyframe_uid=2)
+            neighbor = SimpleNamespace(keyframe_uid=2, video_id="L21_V009", frame_id=21403, pts_time=856.04, shot_id="s1")
             registry = SimpleNamespace(
                 layout=SimpleNamespace(ocr=path, asr=Path(directory) / "asr.sqlite"),
-                catalog=SimpleNamespace(neighbors=lambda uid, radius: [neighbor]),
+                catalog=SimpleNamespace(neighbors=lambda uid, radius: [neighbor], by_uid={2: neighbor}),
             )
             evidence = FrameEvidence(
                 keyframe_uid=1,
@@ -86,14 +86,15 @@ class OnlineFtsTests(unittest.TestCase):
                 pts_time=856.0,
                 shot_id="s1",
             )
-            answer, confidence, _warnings = FtsVideoAnswerer(
+            result = FtsVideoAnswerer(
                 registry,
                 "ocr",
                 [],
                 value_type="number",
             ).answer(video_id="L21_V009", frames=[evidence], question="Số mấy?")
-            self.assertEqual(answer, "6549")
-            self.assertGreater(confidence, 0.0)
+            self.assertEqual(result.answer, "6549")
+            self.assertEqual(result.evidence[0].frame_id, 21403)
+            self.assertGreater(result.confidence, 0.0)
 
 
 if __name__ == "__main__":

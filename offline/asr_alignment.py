@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from typing import Any
+import math
 
 from shared.schemas.asr import AsrSegment
 from shared.schemas.frame import FrameRecord
@@ -24,7 +25,7 @@ def nearest_keyframe_uid(
     end_time: float,
     frames: Iterable[FrameRecord] | Mapping[int, FrameRecord],
 ) -> int:
-    if start_time < 0 or end_time < start_time:
+    if not math.isfinite(start_time) or not math.isfinite(end_time) or start_time < 0 or end_time < start_time:
         raise ValueError("invalid ASR segment timestamps")
     values = list(frames.values()) if isinstance(frames, Mapping) else list(frames)
     candidates = [row for row in values if row.video_id == video_id]

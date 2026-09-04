@@ -59,7 +59,7 @@ def _handle(message: dict[str, Any]) -> dict[str, Any]:
             catalog=SimpleNamespace(by_uid=images),
             layout=SimpleNamespace(data=SimpleNamespace(keyframes=Path("."))),
         )
-        answer, confidence, warnings = QwenVQAAnswerer(
+        result = QwenVQAAnswerer(
             registry,
             str(message["model_id"]),
             agreement_similarity=float(message.get("agreement_similarity", 0.6)),
@@ -68,7 +68,7 @@ def _handle(message: dict[str, Any]) -> dict[str, Any]:
             frames=frames,
             question=str(message["question"]),
         )
-        return {"answer": answer, "confidence": confidence, "warnings": warnings}
+        return result.model_dump(mode="json")
     if operation == "qwen_verify":
         from .verification import QwenVideoVerifier
         from shared.schemas.online import UnifiedQueryPlan, VideoHypothesis

@@ -34,7 +34,7 @@ class _FakeClient:
             )
             return {"plan": plan.model_dump(mode="json")}
         if operation == "qwen_vqa":
-            return {"answer": "red", "confidence": 0.9, "warnings": []}
+            return {"answer": "red", "confidence": 0.9, "warnings": [], "evidence": [{k: v for k, v in payload["frames"][0].items() if k != "image_path"}]}
         raise AssertionError(operation)
 
 
@@ -88,10 +88,10 @@ class OnlineTorchWorkerProxyTests(unittest.TestCase):
                 shot_id="s1",
             )
             client = _FakeClient()
-            answer, confidence, warnings = WorkerQwenVQAAnswerer(
+            result = WorkerQwenVQAAnswerer(
                 registry, "Qwen/Qwen3-VL-2B-Instruct", client=client
             ).answer(video_id="v1", frames=[frame], question="color?")
-            self.assertEqual((answer, confidence, warnings), ("red", 0.9, []))
+            self.assertEqual((result.answer, result.confidence, result.warnings), ("red", 0.9, []))
             operation, payload = client.calls[0]
             self.assertEqual(operation, "qwen_vqa")
             self.assertEqual(Path(payload["frames"][0]["image_path"]), image_path.resolve())

@@ -1,13 +1,17 @@
 # Trạng thái hiện tại của LASTDANCE
 
-Cập nhật: 29/08/2026. File này là **snapshot hiện hành**, không phải append-only session log.
+Cập nhật: 04/09/2026. File này là **snapshot hiện hành**, không phải append-only session log.
 Contract chuẩn nằm tại `docs/BASELINE_SPEC.md`; lệnh vận hành nằm trong các runbook.
+
+Chi tiết đợt sửa và phần chưa xác minh: [QUALIFIER_ACCEPTANCE_RUNBOOK.md](QUALIFIER_ACCEPTANCE_RUNBOOK.md).
 
 ## Kết luận mức hệ thống
 
 **Mức hiện tại: integration-ready cho KIS/QA/TRAKE và submission vòng sơ tuyển; chưa được
 phép gọi là accuracy-complete.** Offline visual đã đóng/PASS. Online Accuracy-Max và official
-export đã implement. OCR EasyOCR đã tích hợp dưới snapshot development. ASR chưa có. Bộ
+export đã implement và bổ sung VerifiedFrameRef cho frame gốc ngoài catalog. QA gắn evidence,
+TRAKE giữ frame cùng shot. OCR giữ nguyên, tạm bỏ qua vì sắp thay artifact theo người dùng.
+ASR đang chạy Kaggle; chưa tải artifact và chưa tích hợp thật. Bộ
 kiểm tra thủ công/ground-truth cần chạy lại để chốt Recall/accuracy sau thay đổi Online/OCR.
 
 | Thành phần | Trạng thái | Evidence hiện hành |
@@ -18,10 +22,10 @@ kiểm tra thủ công/ground-truth cần chạy lại để chốt Recall/accur
 | SigLIP FAISS | `READY` | `IndexIDMap(IndexFlatIP)`, dim 768, 293.336 UID |
 | EVA-CLIP FAISS | `READY` | `IndexIDMap(IndexFlatIP)`, dim 768, 293.336 UID |
 | OCR | `READY-DEVELOPMENT` | coverage 100% UID; 278.091 FTS row; 57 error; chưa final |
-| ASR | `UNAVAILABLE` | chưa có `asr.sqlite` |
+| ASR | `WAITING_KAGGLE` | người dùng xác nhận đang chạy; chờ hoàn tất mới tải HF |
 | Online core/UI | `IMPLEMENTED` | Streamlit trực tiếp `OnlineEngine`, health 200 |
 | Submission official | `IMPLEMENTED` | CSV/ZIP fail-closed theo AIC26 qualifier |
-| Accuracy acceptance | `OPEN` | chưa rerun đủ ground-truth sau Online/OCR update |
+| Accuracy acceptance | `OPEN` | evaluator/runner/freeze đã có; 60 phiếu gán nhãn trống đã tạo, chưa có nhãn người |
 
 Implementation legacy `backend/`, `frontend/`, 12 tài liệu archived và ZIP recovery local
 đã được xóa theo xác nhận của người dùng. Runtime Online duy nhất là `online/streamlit_app.py`

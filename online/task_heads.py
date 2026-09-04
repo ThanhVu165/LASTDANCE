@@ -9,6 +9,7 @@ from typing import Protocol, Sequence, TypeVar
 
 from shared.schemas.online import (
     FrameEvidence,
+    AnswerResult,
     KISCandidate,
     QACandidate,
     TrakeCandidate,
@@ -27,7 +28,7 @@ class VideoAnswerer(Protocol):
         video_id: str,
         frames: Sequence[FrameEvidence],
         question: str,
-    ) -> tuple[str, float, list[str]]: ...
+    ) -> AnswerResult: ...
 
 
 class UnavailableAnswerer:
@@ -37,8 +38,8 @@ class UnavailableAnswerer:
         video_id: str,
         frames: Sequence[FrameEvidence],
         question: str,
-    ) -> tuple[str, float, list[str]]:
-        return "Uncertain", 0.0, ["VQA unavailable; answer requires operator review"]
+    ) -> AnswerResult:
+        return AnswerResult(warnings=["VQA unavailable; answer requires operator review"])
 
 
 T = TypeVar("T")
@@ -194,28 +195,30 @@ def build_qa_candidates(
     for rank, video in enumerate(hypotheses):
         if not video.best_frames or rank >= config.qa_answer_video_top_k:
             continue
-        # Answer once per candidate video, then expose the larger frame pool for
-        # review/submission. VLM providers select their own compact context.
+        # Providers select compact context; submission rows use only returned evidence.
         frames = video.best_frames[: config.portfolio_max_per_video]
         locator = min(1.0, max(0.0, 0.6 * video.video_score + 0.4 * frames[0].final_score))
         # Locator confidence controls auto-accept only. It must never prevent an
         # answer attempt on the configured Top-N candidate videos.
-        answer, answer_confidence, answer_warnings = answerer.answer(
+        result = answerer.answer(
             video_id=video.video_id,
             frames=frames,
             question=question,
         )
-        warnings.extend(answer_warnings)
-        answer = answer[:100] if answer.strip() else "Uncertain"
-        if answer.casefold() == "uncertain" or answer_confidence <= 0.0:
+        result = AnswerResult.model_validate(result)
+        warnings.extend(result.warnings)
+        answer, answer_confidence = result.answer, result.confidence
+        if not answer.strip() or answer.casefold() == "uncertain" or answer_confidence <= 0.0:
             warnings.append(
                 f"QA answer unavailable for {video.video_id}; evidence remains available for manual review"
             )
             continue
         requires_review = (
-            locator <= config.qa_similarity_threshold
+            result.requires_review or locator <= config.qa_similarity_threshold
             or answer_confidence < config.qa_similarity_threshold
         )
+        if any(f.video_id != video.video_id for f in result.evidence):
+            raise ValueError("answerer returned cross-video evidence")
         candidates = [
             QACandidate(
                 video_id=video.video_id,
@@ -226,7 +229,7 @@ def build_qa_candidates(
                 requires_review=requires_review,
                 evidence=frame,
             )
-            for frame in frames
+            for frame in result.evidence
         ]
         candidates.sort(key=lambda item: item.score, reverse=True)
         grouped.append((video.video_id, video.video_score, candidates))
@@ -254,14 +257,14 @@ def build_trake_candidates(
 ) -> list[TrakeCandidate]:
     moment_by_video: list[dict[str, list[FrameEvidence]]] = []
     for result in moment_results:
-        grouped: dict[str, dict[str, FrameEvidence]] = defaultdict(dict)
+        grouped: dict[str, dict[int, FrameEvidence]] = defaultdict(dict)
         for frame in result.evidence:
-            current = grouped[frame.video_id].get(frame.shot_id)
+            current = grouped[frame.video_id].get(frame.frame_id)
             if current is None or frame.final_score > current.final_score:
-                grouped[frame.video_id][frame.shot_id] = frame
+                grouped[frame.video_id][frame.frame_id] = frame
         moment_by_video.append(
             {
-                video: sorted(frames.values(), key=lambda item: item.final_score, reverse=True)[: config.trake_frame_top_k]
+                video: sorted(frames.values(), key=lambda item: (-item.final_score, item.pts_time, item.frame_id))
                 for video, frames in grouped.items()
             }
         )
@@ -272,6 +275,11 @@ def build_trake_candidates(
         per_moment = [grouped.get(video_id, []) for grouped in moment_by_video]
         if any(not values for values in per_moment):
             continue
+        # Prune unreachable suffixes before beam truncation, not valid same-shot frames.
+        for index in range(len(per_moment) - 2, -1, -1):
+            per_moment[index] = [frame for frame in per_moment[index]
+                                 if any(nxt.pts_time > frame.pts_time and nxt.frame_id != frame.frame_id
+                                        for nxt in per_moment[index + 1])]
         beams = [_Beam([frame], frame.final_score) for frame in per_moment[0]][: config.trake_beam_width]
         for values in per_moment[1:]:
             expanded: list[_Beam] = []

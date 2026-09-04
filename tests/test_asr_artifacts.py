@@ -24,7 +24,12 @@ class AsrArtifactTests(unittest.TestCase):
             duration_seconds=2,
         )
         report = summarize_asr_coverage([row], expected_video_ids=["v1"])
-        self.assertTrue(report["completion_gate_passed"])
+        self.assertFalse(report["completion_gate_passed"])
+        self.assertEqual(report["unverified_silent_videos"], 1)
+        verified = AsrRecordEnvelope.model_validate({**row.model_dump(), "audio_sha256": "a" * 64,
+            "silence_verification": {"audio_sha256": "a" * 64, "reviewed_by": "test reviewer",
+                                     "evidence_path": "reviews/v1.json"}})
+        self.assertTrue(summarize_asr_coverage([verified], expected_video_ids=["v1"])["completion_gate_passed"])
 
     def test_error_requires_code(self):
         with self.assertRaises(ValidationError):

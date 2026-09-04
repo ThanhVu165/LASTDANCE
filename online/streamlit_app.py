@@ -295,7 +295,7 @@ def _candidate_rows(candidates: list[object]) -> list[dict[str, object]]:
                 "rank": rank,
                 "video_id": candidate.video_id,
                 "frame_id": candidate.frame_id,
-                "pts_time": round(evidence.pts_time, 3),
+                "pts_time": round(candidate.verified_frame.pts_time if candidate.verified_frame else evidence.pts_time, 3),
                 "shot_id": evidence.shot_id,
                 "score": round(candidate.score, 6),
                 "matched_scene": evidence.query_part,
@@ -355,104 +355,87 @@ def _render_top_candidates(engine: OnlineEngine, candidates: list[object], query
             )
 
 
-def _render_evidence(
-    engine: OnlineEngine,
-    candidate: object,
-    index: int,
-    query_name: str,
-) -> object:
-    prefix = f"{query_name}-{index}"
-    selected = st.checkbox("Chọn vào draft", key=f"candidate-{prefix}")
-    if isinstance(candidate, TrakeCandidate):
-        columns = st.columns(min(len(candidate.evidence), 4))
-        edited_evidence = []
-        for evidence_index, evidence in enumerate(candidate.evidence):
-            catalog_choices = [engine.registry.catalog.by_uid[evidence.keyframe_uid]]
-            catalog_choices.extend(engine.registry.catalog.neighbors(evidence.keyframe_uid, 2))
-            unique_choices = {item.keyframe_uid: item for item in catalog_choices}
-            with columns[evidence_index % len(columns)]:
-                selected_uid = st.selectbox(
-                    f"Moment {evidence_index + 1}",
-                    options=list(unique_choices),
-                    format_func=lambda uid: (
-                        f"frame {unique_choices[uid].frame_id} · {unique_choices[uid].pts_time:.2f}s"
-                    ),
-                    key=f"trake-neighbor-{prefix}-{evidence_index}",
-                )
-                selected_frame = unique_choices[selected_uid]
-                edited = evidence.model_copy(
-                    update={
-                        "keyframe_uid": selected_frame.keyframe_uid,
-                        "frame_id": selected_frame.frame_id,
-                        "pts_time": selected_frame.pts_time,
-                        "shot_id": selected_frame.shot_id,
-                    }
-                )
-                edited_evidence.append(edited)
-                image = evidence_image(engine.registry, selected_uid)
-                if image:
-                    st.image(str(image), caption=f"#{edited.frame_id} · {edited.pts_time:.2f}s")
+def _source_frame_editor(engine, video_id: str, initial: int, key: str, selected: bool):
+    """One source-frame control shared by all task heads; no fake retrieval UIDs."""
+    state_key = f"source-frame-{key}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = initial
+    buttons = st.columns(6)
+    for column, offset in zip(buttons, (-10, -5, -1, 1, 5, 10)):
+        if column.button(f"{offset:+d}", key=f"step-{key}-{offset}"):
+            st.session_state[state_key] = max(0, int(st.session_state[state_key]) + offset)
+    frame_id = int(st.number_input("Frame nguồn", min_value=0, step=1, key=state_key))
+    decoder = getattr(engine, "_review_decoder", None)
+    if decoder is None:
+        decoder = ExactFrameDecoder(engine.registry)
+        engine._review_decoder = decoder
+    if st.button("Xem 21 frame liên tiếp", key=f"strip-{key}"):
         try:
-            edited_candidate = TrakeCandidate.model_validate(
-                {
-                    **candidate.model_dump(),
-                    "frame_ids": [item.frame_id for item in edited_evidence],
-                    "pts_times": [item.pts_time for item in edited_evidence],
-                    "evidence": [item.model_dump() for item in edited_evidence],
-                }
-            )
+            with st.spinner("Đọc frame và timestamp từ video nguồn..."):
+                rows = decoder.strip(video_id, frame_id)
+            st.session_state[f"strip-result-{key}"] = rows
         except Exception as error:
-            st.error(f"TRAKE neighbor selection is invalid: {error}")
-            return None
-        return edited_candidate if selected else None
+            st.error(str(error))
+    rows = st.session_state.get(f"strip-result-{key}", [])
+    if rows:
+        columns = st.columns(7)
+        for index, (reference, image_path) in enumerate(rows):
+            with columns[index % 7]:
+                st.image(str(image_path), caption=f"{reference.frame_id} · {reference.pts_time:.3f}s")
+    reference = None
+    if selected:
+        known = any(frame.frame_id == frame_id for frame in engine.registry.catalog.by_video.get(video_id, []))
+        if not known:
+            reference = decoder.verifier.verify(video_id, frame_id)
+    return frame_id, reference
 
-    evidence = candidate.evidence
-    left, right = st.columns([1, 2])
-    image = evidence_image(engine.registry, evidence.keyframe_uid)
-    with left:
-        if image:
-            st.image(str(image), caption=f"{candidate.video_id} · {evidence.pts_time:.2f}s")
-    with right:
-        st.caption(
-            f"score={candidate.score:.4f} · visual={evidence.score_visual:.4f} · "
-            f"neighbor={evidence.neighbor_support:.4f} · consensus={evidence.model_consensus:.2f} · "
-            f"vlm={evidence.vlm_score if evidence.vlm_score is not None else '—'}"
-        )
-        frame_id = int(
-            st.number_input(
-                "Submission frame_id",
-                min_value=0,
-                value=int(candidate.frame_id),
-                step=1,
-                key=f"frame-{prefix}",
-            )
-        )
-        if isinstance(candidate, QACandidate):
-            if candidate.requires_review:
-                st.warning("Answer này chưa qua auto-accept; chọn thủ công đồng nghĩa bạn đã xác minh.")
-            answer = st.text_input(
-                "Answer (max 100 characters)",
-                value=candidate.answer,
-                max_chars=100,
-                key=f"answer-{prefix}",
-            )
-            edited = candidate.model_copy(
-                update={
-                    "frame_id": frame_id,
-                    "answer": answer,
-                    "requires_review": False if selected else candidate.requires_review,
-                }
-            )
+
+def _render_evidence(engine: OnlineEngine, candidate: object, index: int, query_name: str) -> object:
+    identity = (candidate.video_id, candidate.frame_ids if isinstance(candidate, TrakeCandidate) else candidate.frame_id)
+    token = hashlib.sha256(repr(identity).encode()).hexdigest()[:12]
+    prefix = f"{query_name}-{index}-{token}"
+    selected = st.checkbox("Chọn vào draft", key=f"candidate-{prefix}")
+    try:
+        if isinstance(candidate, TrakeCandidate):
+            frame_ids, times, references = [], [], []
+            for event, (initial, evidence) in enumerate(zip(candidate.frame_ids, candidate.evidence)):
+                st.caption(f"Event {event + 1}")
+                image = evidence_image(engine.registry, evidence.keyframe_uid)
+                if image:
+                    st.image(str(image), caption=f"Evidence retrieval: {evidence.frame_id}")
+                frame_id, reference = _source_frame_editor(engine, candidate.video_id, initial,
+                                                          f"{prefix}-{event}", selected)
+                frame_ids.append(frame_id)
+                references.append(reference)
+                if reference is not None:
+                    times.append(reference.pts_time)
+                else:
+                    known = next((f for f in engine.registry.catalog.by_video[candidate.video_id]
+                                  if f.frame_id == frame_id), None)
+                    if known is None:
+                        if selected:
+                            raise ValueError("Frame nguồn chưa được xác thực")
+                        return None
+                    times.append(known.pts_time)
+            edited = TrakeCandidate.model_validate({**candidate.model_dump(), "frame_ids": frame_ids,
+                                                    "pts_times": times, "verified_frames": references})
         else:
-            edited = candidate.model_copy(update={"frame_id": frame_id})
-        if st.button("Decode exact source frame", key=f"decode-{prefix}"):
-            try:
-                with st.spinner("FFmpeg is decoding by exact frame index..."):
-                    exact = ExactFrameDecoder(engine.registry).decode(candidate.video_id, frame_id)
-                st.image(str(exact), caption=f"Exact source frame #{frame_id}")
-            except Exception as error:
-                st.error(str(error))
-    return edited if selected else None
+            image = evidence_image(engine.registry, candidate.evidence.keyframe_uid)
+            if image:
+                st.image(str(image), caption=f"{candidate.video_id} · evidence {candidate.evidence.frame_id}")
+            frame_id, reference = _source_frame_editor(engine, candidate.video_id, candidate.frame_id, prefix, selected)
+            values = {**candidate.model_dump(), "frame_id": frame_id, "verified_frame": reference}
+            if isinstance(candidate, QACandidate):
+                values["answer"] = st.text_input("Answer (max 100 characters)", value=candidate.answer,
+                                                max_chars=100, key=f"answer-{prefix}")
+                confirmation = hashlib.sha256(f"{candidate.video_id}:{frame_id}:{values['answer']}".encode()).hexdigest()[:16]
+                confirmed = st.checkbox("Tôi đã xác minh đáp án tại frame này", key=f"qa-confirm-{prefix}-{confirmation}")
+                values["requires_review"] = not confirmed
+            edited = type(candidate).model_validate(values)
+        return edited if selected else None
+    except Exception as error:
+        st.error(f"Không thể chọn kết quả: {error}")
+        return None
 
 
 def _render_grouped(
@@ -464,8 +447,17 @@ def _render_grouped(
     for index, candidate in enumerate(run.top_candidates):
         grouped[candidate.video_id].append((index, candidate))
     selected: list[object] = []
+    manual_index = len(run.top_candidates)
+    review_key = query_name + "-" + hashlib.sha256(run.request.raw_query.encode()).hexdigest()[:12]
     for video in run.video_hypotheses:
         values = grouped.get(video.video_id)
+        if not values and run.request.task_type == TaskType.QA:
+            # These are blank review forms only; they never enter automatic Top 100.
+            values = []
+            for frame in video.best_frames[:engine.config.portfolio_max_per_video]:
+                values.append((manual_index, QACandidate(video_id=video.video_id, frame_id=frame.frame_id,
+                    answer="", score=frame.final_score, confidence=0, requires_review=True, evidence=frame)))
+                manual_index += 1
         if not values:
             continue
         with st.expander(
@@ -481,7 +473,7 @@ def _render_grouped(
                 st.video(str(source), start_time=start)
             for index, candidate in values:
                 st.markdown(f"**#{index + 1} · {_candidate_summary(candidate)}**")
-                edited = _render_evidence(engine, candidate, index, query_name)
+                edited = _render_evidence(engine, candidate, index, review_key)
                 if edited is not None:
                     selected.append(edited)
                 st.divider()

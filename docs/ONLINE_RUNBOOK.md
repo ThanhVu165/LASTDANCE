@@ -315,3 +315,13 @@ xấp xỉ. Ảnh decode được cache tại `$AIC_DATA/tmp/online-refinement/`
 Khi visual preflight fail, không tạo submission. Khi OCR/ASR invalid, giữ file để điều tra
 hoặc thay bằng artifact hợp lệ; không đổi tên cột và không giả score bằng 0. Sau mọi thay đổi
 model/index/config, chạy compile, unit test, deep preflight và diagnostic lại.
+
+
+## Bổ sung qualifier 04/09/2026
+
+Xem [QUALIFIER_ACCEPTANCE_RUNBOOK.md](QUALIFIER_ACCEPTANCE_RUNBOOK.md) cho VerifiedFrameRef
+ngoài catalog, ±1/5/10 và dải 21 frame, QA evidence/answer review, TRAKE giữ frame cùng shot,
+scoring/ablation và freeze held-out. Không rebuild ba FAISS. CSV/ZIP vẫn giữ format chuẩn;
+raw frame phải được ffprobe xác thực với fingerprint nguồn. QA đổi frame/answer phải duyệt
+lại; video chưa có answer vẫn có form nhập thủ công. ASR sidecar coverage không có/sai thì
+ASR INVALID; visual hoạt động độc lập. OCR tạm giữ nguyên theo chỉ đạo người dùng.

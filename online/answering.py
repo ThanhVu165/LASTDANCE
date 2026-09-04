@@ -1,77 +1,65 @@
-"""Route QA answer extraction to candidate-video OCR/ASR evidence."""
-
+"""Question-conditioned extraction from frame-local OCR/ASR evidence."""
 from __future__ import annotations
-
 import re
 from typing import Sequence
-
-from shared.schemas.online import FrameEvidence
-
-from .artifacts import ArtifactRegistry
+from shared.schemas.online import FrameEvidence, AnswerResult
 from .fts import FtsSearcher
+
+_NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)*")
 
 
 class FtsVideoAnswerer:
-    def __init__(
-        self,
-        registry: ArtifactRegistry,
-        modality: str,
-        intents: Sequence[str],
-        *,
-        value_type: str = "free_text",
-    ) -> None:
-        self.registry = registry
-        self.modality = modality
-        self.intents = [item for item in intents if item.strip()]
+    def __init__(self, registry, modality: str, intents: Sequence[str], *, value_type="free_text"):
+        self.registry, self.modality = registry, modality
+        self.intents = [x for x in intents if x.strip()]
         self.value_type = value_type
 
-    def _extract_unknown_value(self, hits: Sequence[object]) -> str:
-        texts = [re.sub(r"\s+", " ", str(getattr(hit, "text", ""))).strip() for hit in hits]
-        if self.value_type == "number":
-            candidates: list[tuple[int, int, str]] = []
-            for text_index, text in enumerate(texts):
-                for value in re.findall(r"\d+(?:[.,]\d+)?", text):
-                    digit_count = sum(character.isdigit() for character in value)
-                    candidates.append((digit_count, -text_index, value))
-            if candidates:
-                return max(candidates)[2]
-            return ""
-        return next((text[:100] for text in texts if text), "")
+    def _number_candidates(self, hits, question: str):
+        # A noun supplied by the question is a constraint, not a video-specific rule.
+        noun = re.search(r"(?:bao nhiêu|how many)\s+([^\W\d_]+)", question.casefold())
+        known = set(_NUMBER.findall(question))
+        candidates = []
+        for hit in hits:
+            text = str(hit.text)
+            for match in _NUMBER.finditer(text):
+                if match.group() in known:
+                    continue
+                if noun and re.match(r"\s*" + re.escape(noun.group(1)) + r"\b", text[match.end():].casefold()) is None:
+                    continue
+                candidates.append((match.group(), hit))
+        return candidates
 
-    def answer(
-        self,
-        *,
-        video_id: str,
-        frames: Sequence[FrameEvidence],
-        question: str,
-    ) -> tuple[str, float, list[str]]:
+    def _extract_unknown_value(self, hits, question: str = "") -> str:
+        if self.value_type != "number":
+            return ""
+        candidates = self._number_candidates(hits, question)
+        values = {value for value, _hit in candidates}
+        return next(iter(values)) if len(values) == 1 else ""
+
+    def answer(self, *, video_id: str, frames: Sequence[FrameEvidence], question: str) -> AnswerResult:
         path = self.registry.layout.ocr if self.modality == "ocr" else self.registry.layout.asr
-        searcher = FtsSearcher(path, self.modality)
-        if self.intents:
-            hits = searcher.search_hits(
-                self.intents,
-                limit=20,
-                restrict_videos={video_id},
-            )
-        else:
-            uids: list[int] = []
-            for frame in frames:
-                uids.append(frame.keyframe_uid)
-                uids.extend(
-                    item.keyframe_uid
-                    for item in self.registry.catalog.neighbors(frame.keyframe_uid, 2)
-                )
-            hits = searcher.rows_for_uids(uids, video_id=video_id)
-        if not hits:
-            return "Uncertain", 0.0, [f"No {self.modality.upper()} answer evidence in candidate video {video_id}"]
-        preferred = {frame.keyframe_uid for frame in frames}
-        hits.sort(key=lambda item: (item.keyframe_uid in preferred, item.score), reverse=True)
-        answer = self._extract_unknown_value(hits)
+        uids = []
+        for frame in frames:
+            uids.append(frame.keyframe_uid)
+            uids.extend(f.keyframe_uid for f in self.registry.catalog.neighbors(frame.keyframe_uid, 2))
+        # Known literals may locate videos but must not substitute for answer evidence.
+        hits = FtsSearcher(path, self.modality).rows_for_uids(uids, video_id=video_id)
+        answer = self._extract_unknown_value(hits, question)
         if not answer:
-            return "Uncertain", 0.0, [
-                f"{self.modality.upper()} text exists but no {self.value_type} answer was extracted in {video_id}"
-            ]
-        confidence = 0.78 if self.value_type == "number" else 0.65
-        return answer[:100], confidence, [
-            f"{self.modality.upper()} frame-local answer requires operator verification"
-        ]
+            return AnswerResult(provider=self.modality, warnings=[
+                f"No unambiguous {self.value_type} answer in frame-local {self.modality.upper()}; continue verification"])
+        candidates = [(value, hit) for value, hit in self._number_candidates(hits, question) if value == answer]
+        supported = []
+        for _value, hit in candidates:
+            known = self.registry.catalog.by_uid.get(hit.keyframe_uid)
+            if known is None or known.video_id != video_id:
+                continue
+            if any(f.keyframe_uid == hit.keyframe_uid for f in supported):
+                continue
+            supported.append(FrameEvidence(keyframe_uid=known.keyframe_uid, video_id=known.video_id,
+                                           frame_id=known.frame_id, pts_time=known.pts_time, shot_id=known.shot_id))
+        if not supported:
+            return AnswerResult(warnings=["Answer text has no valid catalog evidence"])
+        return AnswerResult(answer=answer, value_type=self.value_type, evidence=supported,
+                            confidence=0.65, requires_review=True, provider=self.modality,
+                            warnings=["Text extraction requires operator verification"])

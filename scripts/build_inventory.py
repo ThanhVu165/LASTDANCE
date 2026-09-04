@@ -26,6 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     layout = DataLayout(args.data_root.resolve()) if args.data_root else DataLayout.from_environment()
+    if args.limit is not None and (args.output is None or args.output.resolve() == (layout.index / "inventory.json").resolve()):
+        raise ValueError("--limit requires a separate --output outside the production inventory")
     paths = discover_videos(layout.videos)
     if args.limit is not None:
         if args.limit < 0:

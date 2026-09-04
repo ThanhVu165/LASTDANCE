@@ -9,7 +9,7 @@ _MAX_INT64 = (1 << 63) - 1
 
 
 class AsrSegment(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     video_id: str
     segment_id: str

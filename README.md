@@ -26,6 +26,8 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
 11. [`docs/ASR_RUNBOOK.md`](docs/ASR_RUNBOOK.md) - ASR faster-whisper large-v3 chạy Kaggle
     GPU độc lập (Nhánh 3), audio extraction local, batch checkpoint, snapshot + publish index.
 
+12. [`docs/QUALIFIER_ACCEPTANCE_RUNBOOK.md`](docs/QUALIFIER_ACCEPTANCE_RUNBOOK.md) - source-frame review, bộ chấm chính thức, gán nhãn 60 câu và điều kiện nghiệm thu.
+
 ASR contract nằm trực tiếp trong `BASELINE_SPEC.md` §2A. Không duy trì spec/kiến trúc
 archived song song; lịch sử quyết định nằm trong Git và Changelog của baseline.
 

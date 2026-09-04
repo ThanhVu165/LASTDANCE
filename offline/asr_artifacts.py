@@ -47,15 +47,35 @@ def _relative_path(value: str) -> str:
     if not value or "\\" in value:
         raise ValueError("artifact path must be relative and use POSIX separators")
     path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts:
+    if path.is_absolute() or ".." in path.parts or ":" in value:
         raise ValueError("artifact path cannot traverse parents")
     return value
+
+
+class SilenceVerification(BaseModel):
+    """A human-reviewed no-speech decision bound to the exact audio bytes."""
+    model_config = ConfigDict(extra="forbid")
+    audio_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reviewed_by: str = Field(min_length=1)
+    evidence_path: str
+
+    @field_validator("reviewed_by")
+    @classmethod
+    def reviewer(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("silence requires a named reviewer")
+        return value.strip()
+
+    @field_validator("evidence_path")
+    @classmethod
+    def evidence(cls, value: str) -> str:
+        return _relative_path(value)
 
 
 class AsrRecordEnvelope(BaseModel):
     """One terminal result for one video (one JSONL line)."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, allow_inf_nan=False)
 
     schema_version: Literal[1] = 1
     batch_id: str
@@ -69,6 +89,8 @@ class AsrRecordEnvelope(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     error_status: str | None = None
+    runtime_signature: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    silence_verification: SilenceVerification | None = None
 
     @field_validator("batch_id", "video_id")
     @classmethod
@@ -105,18 +127,31 @@ class AsrRecordEnvelope(BaseModel):
             raise ValueError("segment_id values must be unique")
         if any(s.video_id != self.video_id for s in self.segments):
             raise ValueError("segment video_id must match envelope")
+        if any(s.end_time > self.audio_duration_seconds for s in self.segments):
+            raise ValueError("segment extends past verified audio duration")
         if self.status == AsrVideoStatus.SUCCESS:
             if not self.segments or self.error_code is not None:
                 raise ValueError("success requires segments and no error_code")
         elif self.status == AsrVideoStatus.SILENT:
             if self.segments or self.error_code is not None:
                 raise ValueError("silent videos cannot contain segments or error_code")
+            if self.silence_verification is not None and self.silence_verification.audio_sha256 != self.audio_sha256:
+                raise ValueError("silence verification does not match audio bytes")
         else:
             if self.segments or not (self.error_code or self.error_status):
                 raise ValueError("error videos require error metadata and no segments")
         if self.status != AsrVideoStatus.ERROR and (self.error_status or self.error_message):
             raise ValueError("non-error videos cannot carry error metadata")
         return self
+
+    @property
+    def verified_complete(self) -> bool:
+        # Legacy Kaggle v1 rows remain readable, but empty inference alone is not
+        # evidence that the source contains no speech.
+        return self.status == AsrVideoStatus.SUCCESS or (
+            self.status == AsrVideoStatus.SILENT and self.silence_verification is not None
+            and self.audio_sha256 == self.silence_verification.audio_sha256
+        )
 
 
 # Friendly aliases used by callers and notebooks.
@@ -190,7 +225,7 @@ class AsrShardManifest(BaseModel):
         if self.error_records is not None and self.error_records != self.error_videos:
             raise ValueError("error_records does not match error_videos")
         gate = (
-            self.processed_videos == self.expected_videos
+            self.expected_videos > 0 and self.processed_videos == self.expected_videos
             and self.error_videos == self.duplicate_videos == 0
             and self.missing_videos == self.foreign_videos == 0
         )
@@ -237,5 +272,6 @@ def summarize_asr_coverage(
         "foreign_videos": foreign,
         "expected_video_sha256": video_set_sha256(expected),
         "actual_video_sha256": video_set_sha256(actual),
-        "completion_gate_passed": len(rows) == len(expected) and not errors and not duplicates and not missing and not foreign,
+        "unverified_silent_videos": sum(row.status == AsrVideoStatus.SILENT and not row.verified_complete for row in rows),
+        "completion_gate_passed": len(rows) == len(expected) and all(row.verified_complete for row in rows) and not duplicates and not missing and not foreign,
     }

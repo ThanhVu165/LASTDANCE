@@ -7,6 +7,20 @@ immutable SQLite snapshot, publish vào Online index.
 
 > **Nguồn chuẩn:** `docs/BASELINE_SPEC.md` §2A.
 
+## Trạng thái 04/09/2026 — job đang chạy
+
+Người dùng xác nhận ASR đang chạy trên Kaggle: chờ hoàn tất rồi mới tải artifact từ
+Hugging Face. Đợt qualifier audit không sửa notebook/runtime của job và chưa tải dữ liệu.
+Các hướng dẫn producer bên dưới mô tả workflow hiện có, không phải xác nhận pin/resume
+đã được chứng minh. Xem [QUALIFIER_ACCEPTANCE_RUNBOOK.md](QUALIFIER_ACCEPTANCE_RUNBOOK.md)
+để kiểm tra provenance sau khi job xong.
+
+Consumer mới giữ tương thích envelope v1 nhưng silent thiếu proof không được tính complete.
+Publish cần catalog/state tại data root đích, kiểm tra hash/coverage/UID/alignment thực.
+`--allow-partial` chỉ development; mọi snapshot vẫn production_ready=false. Pair
+`asr.sqlite` + `asr.coverage.json` thay từng file atomic, reader từ chối pair bị gián đoạn;
+chạy lại publish cùng immutable snapshot để khôi phục. Chưa kiểm chứng artifact Kaggle thật.
+
 ---
 
 ## 1. Scope & Design

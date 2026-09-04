@@ -18,6 +18,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from offline.artifacts import sha256_file
+from offline.asr_alignment import nearest_keyframe_uid
 from offline.asr_artifacts import AsrRecordEnvelope, AsrVideoStatus, video_set_sha256
 from offline.catalog import FRAME_COLUMNS, validate_frames_catalog
 from shared.schemas.frame import FrameRecord
@@ -32,6 +33,7 @@ class AsrVideoCoverage(BaseModel):
     segment_count: int = Field(ge=0)
     status: AsrVideoStatus
     error: bool
+    silence_verified: bool = False
     coverage_fraction: float = Field(ge=0, le=1)
 
 
@@ -56,6 +58,7 @@ class AsrSnapshotManifest(BaseModel):
     silent_videos: int = Field(ge=0)
     error_videos: int = Field(ge=0)
     missing_videos: int = Field(ge=0)
+    unverified_silent_videos: int = Field(default=0, ge=0)
     covered_videos: int = Field(ge=0)
     coverage_fraction: float = Field(ge=0, le=1)
     sqlite_path: Literal["asr.sqlite"] = "asr.sqlite"
@@ -117,6 +120,9 @@ def _validate_envelopes(
     records: Sequence[AsrRecordEnvelope], catalog: dict[int, FrameRecord]
 ) -> None:
     catalog_videos = {frame.video_id for frame in catalog.values()}
+    by_video = defaultdict(list)
+    for frame in catalog.values():
+        by_video[frame.video_id].append(frame)
     seen: set[str] = set()
     for envelope in records:
         if envelope.video_id not in catalog_videos:
@@ -130,6 +136,8 @@ def _validate_envelopes(
                 raise ValueError(f"foreign ASR keyframe UID: {segment.keyframe_uid_nearest}")
             if frame.video_id != envelope.video_id:
                 raise ValueError("ASR segment keyframe belongs to another video")
+            if nearest_keyframe_uid(envelope.video_id, segment.start_time, segment.end_time, by_video[envelope.video_id]) != segment.keyframe_uid_nearest:
+                raise ValueError("ASR segment is not aligned to the nearest canonical keyframe")
 
 
 def _fts_probe(connection: sqlite3.Connection) -> dict[str, Any]:
@@ -142,8 +150,8 @@ def _fts_probe(connection: sqlite3.Connection) -> dict[str, Any]:
     if not token:
         return {"executed": False, "reason": "no_probe_token"}
     matched = connection.execute(
-        "SELECT 1 FROM asr_fts WHERE asr_fts MATCH ? AND segment_id=? LIMIT 1",
-        (f'"{token.replace(chr(34), chr(34) * 2)}"', row[1]),
+        "SELECT 1 FROM asr_fts WHERE asr_fts MATCH ? AND segment_id=? AND video_id=? LIMIT 1",
+        (f'"{token.replace(chr(34), chr(34) * 2)}"', row[1], row[0]),
     ).fetchone()
     if matched is None:
         raise RuntimeError("ASR FTS5 probe did not return its source segment")
@@ -237,7 +245,8 @@ def build_asr_snapshot(
                 segment_count=observed,
                 status=status,
                 error=status == AsrVideoStatus.ERROR,
-                coverage_fraction=(1.0 if row and status != AsrVideoStatus.ERROR else 0.0),
+                silence_verified=bool(row and row.status == AsrVideoStatus.SILENT and row.verified_complete),
+                coverage_fraction=(1.0 if row and row.verified_complete else 0.0),
             )
         counts = Counter(row.status for row in records)
         missing = len(set(per_video) - set(by_video))
@@ -256,8 +265,9 @@ def build_asr_snapshot(
             silent_videos=counts[AsrVideoStatus.SILENT],
             error_videos=counts[AsrVideoStatus.ERROR],
             missing_videos=missing,
-            covered_videos=sum(1 for row in records if row.status != AsrVideoStatus.ERROR),
-            coverage_fraction=(len(records) - counts[AsrVideoStatus.ERROR]) / len(per_video),
+            unverified_silent_videos=sum(row.status == AsrVideoStatus.SILENT and not row.verified_complete for row in records),
+            covered_videos=sum(row.verified_complete for row in records),
+            coverage_fraction=sum(row.verified_complete for row in records) / len(per_video),
             sqlite_sha256=sha256_file(sqlite_path),
             sqlite_bytes=sqlite_path.stat().st_size,
             fts_rows=fts_rows,

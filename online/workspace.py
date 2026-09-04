@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import tempfile
@@ -23,6 +24,8 @@ from shared.schemas.online import (
 )
 
 from .config import OnlineLayout
+from .frame_references import SourceFrameVerifier
+from types import SimpleNamespace
 
 
 Candidate = KISCandidate | QACandidate | TrakeCandidate
@@ -83,6 +86,7 @@ class SubmissionWorkspace:
         query_history: Iterable[dict[str, Any]] = (),
         provenance: dict[str, str] | None = None,
         catalog: Any = None,
+        frame_verifier: Any = None,
     ) -> None:
         self.layout = layout or OnlineLayout.from_environment()
         self.folder_name = sanitize_component(folder_name, fallback="submission-review")
@@ -105,6 +109,8 @@ class SubmissionWorkspace:
         }
         self.query_history = [dict(item) for item in query_history]
         self.provenance = dict(provenance or {})
+        self._frame_verifier = frame_verifier or SourceFrameVerifier(SimpleNamespace(layout=self.layout))
+        self._verified_refs = {}
         self._catalog = catalog
         self._catalog_cache: dict[tuple[str, int], float] | None = None
         for name, entries in self.query_drafts.items():
@@ -153,6 +159,8 @@ class SubmissionWorkspace:
         seen = {_candidate_key(item) for item in current}
         merged = list(current)
         for item in incoming:
+            if len(merged) >= limit:
+                break
             key = _candidate_key(item)
             if key in seen:
                 continue
@@ -182,6 +190,8 @@ class SubmissionWorkspace:
         self.query_drafts[query_name] = entries
 
     def validate_complete(self) -> None:
+        self._frame_verifier.clear()
+        self._verified_refs.clear()
         for name, spec in self.expected_queries.items():
             entries = self.query_drafts.get(name, [])
             if not entries:
@@ -295,11 +305,7 @@ class SubmissionWorkspace:
             times: list[float] = []
             for frame_id in frame_ids:
                 key = (video_id, frame_id)
-                if key not in catalog:
-                    raise ValueError(
-                        f"{spec.csv_filename} row {row_number} references unknown frame {key}"
-                    )
-                times.append(catalog[key])
+                times.append(self._frame_time(video_id, frame_id, self._verified_refs.get(key)))
             if spec.task_type == TaskType.QA:
                 answer = row[2]
                 if not answer or not answer.strip() or len(answer) > 100:
@@ -409,11 +415,9 @@ class SubmissionWorkspace:
                 raise ValueError("video_id must not contain .mp4 or unsafe characters")
             frame_ids = item.frame_ids if isinstance(item, TrakeCandidate) else [item.frame_id]
             times = []
-            for frame_id in frame_ids:
-                key = (item.video_id, frame_id)
-                if key not in catalog:
-                    raise ValueError(f"unknown submission frame: {key}")
-                times.append(catalog[key])
+            references = (item.verified_frames or [None] * len(frame_ids)) if isinstance(item, TrakeCandidate) else [item.verified_frame]
+            for frame_id, reference in zip(frame_ids, references):
+                times.append(self._frame_time(item.video_id, frame_id, reference))
             if isinstance(item, QACandidate):
                 if not item.answer or not item.answer.strip() or len(item.answer) > 100:
                     raise ValueError("QA answer must contain 1-100 characters")
@@ -428,12 +432,32 @@ class SubmissionWorkspace:
                     )
                 if any(frame.video_id != item.video_id for frame in item.evidence):
                     raise ValueError("TRAKE sequence must not mix videos")
+                if item.pts_times != times:
+                    raise ValueError("TRAKE timestamps do not match verified source/catalog frames")
                 if any(right <= left for left, right in zip(times, times[1:])):
                     raise ValueError("TRAKE frames must be strictly increasing in catalog time")
             key = _candidate_key(item)
             if key in seen:
                 raise ValueError(f"duplicate submission hypothesis: {key}")
             seen.add(key)
+
+    def _frame_time(self, video_id: str, frame_id: int, reference=None) -> float:
+        if type(frame_id) is not int or frame_id < 0:
+            raise ValueError("frame_id must be a nonnegative integer")
+        key = (video_id, frame_id)
+        if reference is not None:
+            if (reference.video_id, reference.frame_id) != key:
+                raise ValueError("verified frame reference does not match candidate")
+            timestamp = self._frame_verifier.validate(reference)
+            self._verified_refs[key] = reference
+            return timestamp
+        catalog = self._catalog_index()
+        if key not in catalog:
+            raise ValueError(f"unknown submission frame requires VerifiedFrameRef: {key}")
+        timestamp = catalog[key]
+        if not math.isfinite(timestamp) or timestamp < 0:
+            raise ValueError("catalog timestamp must be finite and nonnegative")
+        return timestamp
 
     def _catalog_index(self) -> dict[tuple[str, int], float]:
         if self._catalog_cache is not None:
