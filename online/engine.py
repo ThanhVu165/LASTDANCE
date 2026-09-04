@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import time
 from typing import Callable
@@ -22,7 +21,7 @@ from shared.schemas.online import (
 )
 
 from .answering import FtsVideoAnswerer
-from .artifacts import ArtifactRegistry, EXPECTED_VISUAL
+from .artifacts import ArtifactRegistry, EXPECTED_VISUAL, load_ocr_snapshot_summary
 from .config import OnlineConfig, OnlineLayout
 from .encoders import TextEncoderRegistry, WorkerTextEncoderRegistry, get_text_encoder_registry
 from .planners import PlannerChain, get_query_planner
@@ -509,12 +508,19 @@ class OnlineEngine:
             and ocr_status is not None
             and ocr_status.availability == ArtifactAvailability.READY
         ):
-            coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
-            provenance["ocr_snapshot_id"] = str(coverage["snapshot_id"])
-            provenance["ocr_intended_use"] = str(coverage["intended_use"])
-            provenance["ocr_coverage_fraction"] = str(coverage["coverage_fraction"])
-            provenance["ocr_error_keyframes"] = str(coverage["error_keyframes"])
-            provenance["ocr_sqlite_sha256"] = str(coverage["sqlite_sha256"])
+            summary = load_ocr_snapshot_summary(coverage_path)
+            provenance["ocr_snapshot_id"] = summary.snapshot_id
+            provenance["ocr_intended_use"] = summary.intended_use
+            provenance["ocr_source_format"] = summary.source_format
+            provenance["ocr_coverage_fraction"] = str(summary.coverage_fraction)
+            provenance["ocr_error_keyframes"] = str(summary.error_keyframes)
+            provenance["ocr_missing_keyframes"] = str(summary.missing_keyframes)
+            provenance["ocr_engines"] = summary.engines
+            provenance["ocr_sqlite_sha256"] = summary.sqlite_sha256
+            if summary.residual_frames is not None:
+                provenance["ocr_residual_frames"] = str(summary.residual_frames)
+            if summary.residual_regions is not None:
+                provenance["ocr_residual_regions"] = str(summary.residual_regions)
         return provenance
 
     def _elapsed_ms(self, started: float) -> float:

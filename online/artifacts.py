@@ -14,7 +14,8 @@ import numpy as np
 
 from offline.artifacts import sha256_file
 from offline.ocr_snapshot import OcrSnapshotManifest
-from offline.ocr_snapshot_hf import validate_local_snapshot_for_publish
+from offline.ocr_snapshot_hf import SNAPSHOT_FILENAMES, validate_local_snapshot_for_publish
+from offline.ocr_v2_snapshot import OcrV2SnapshotManifest, validate_ocr_v2_snapshot
 from shared.schemas.frame import FrameRecord
 from shared.schemas.online import ArtifactAvailability, ArtifactStatus
 
@@ -30,6 +31,90 @@ EXPECTED_VISUAL = {
         "bf4190eb65dd5204ffb03e980108beb1200e0873",
     ),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class OcrSnapshotSummary:
+    snapshot_id: str
+    intended_use: str
+    source_format: str
+    catalog_sha256: str
+    catalog_records: int
+    catalog_videos: int
+    observed_uid_sha256: str
+    coverage_fraction: float
+    error_keyframes: int
+    missing_keyframes: int
+    fts_rows: int
+    sqlite_sha256: str
+    sqlite_bytes: int
+    engines: str
+    residual_frames: int | None = None
+    residual_regions: int | None = None
+
+
+def load_ocr_snapshot_summary(path: Path) -> OcrSnapshotSummary:
+    """Parse a supported OCR sidecar into fields shared by registry and provenance."""
+
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("OCR coverage must be a JSON object")
+    schema_version = raw.get("schema_version")
+    source_format = raw.get("source_format")
+    if type(schema_version) is not int:
+        raise ValueError("OCR coverage schema_version must be an integer")
+    if schema_version in {1, 2}:
+        manifest = OcrSnapshotManifest.model_validate(raw)
+        tiers = ",".join(sorted({batch.tier for batch in manifest.batches.values()}))
+        return OcrSnapshotSummary(
+            snapshot_id=manifest.snapshot_id,
+            intended_use=manifest.intended_use,
+            source_format=manifest.source_format,
+            catalog_sha256=manifest.catalog_sha256,
+            catalog_records=manifest.catalog_records,
+            catalog_videos=manifest.catalog_videos,
+            observed_uid_sha256=manifest.observed_uid_sha256,
+            coverage_fraction=manifest.coverage_fraction,
+            error_keyframes=manifest.error_keyframes,
+            missing_keyframes=manifest.missing_keyframes,
+            fts_rows=manifest.fts_rows,
+            sqlite_sha256=manifest.sqlite_sha256,
+            sqlite_bytes=manifest.sqlite_bytes,
+            engines=tiers or "unknown",
+        )
+    if schema_version == 3 and source_format == "ocr_v2_batch_union_v1":
+        manifest_v2 = OcrV2SnapshotManifest.model_validate(raw)
+        totals = manifest_v2.totals
+        coverage = (
+            totals.processed_keyframes / totals.expected_keyframes
+            if totals.expected_keyframes
+            else 0.0
+        )
+        engines = ",".join(
+            f"{engine}={count}"
+            for engine, count in sorted(totals.selected_region_engine_counts.items())
+        )
+        return OcrSnapshotSummary(
+            snapshot_id=manifest_v2.snapshot_id,
+            intended_use=manifest_v2.intended_use,
+            source_format=manifest_v2.source_format,
+            catalog_sha256=manifest_v2.catalog_sha256,
+            catalog_records=manifest_v2.catalog_records,
+            catalog_videos=manifest_v2.catalog_videos,
+            observed_uid_sha256=totals.observed_uid_sha256,
+            coverage_fraction=coverage,
+            error_keyframes=totals.error_keyframes,
+            missing_keyframes=totals.missing_keyframes,
+            fts_rows=manifest_v2.fts_rows,
+            sqlite_sha256=manifest_v2.sqlite_sha256,
+            sqlite_bytes=manifest_v2.sqlite_bytes,
+            engines=engines or "unknown",
+            residual_frames=totals.residual_frames,
+            residual_regions=totals.residual_regions,
+        )
+    raise ValueError(
+        f"unsupported OCR snapshot schema/source_format: {schema_version}/{source_format}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,13 +397,28 @@ def _inspect_ocr(layout: OnlineLayout, catalog: FrameCatalog) -> ArtifactStatus:
         return status
     path = str(layout.ocr)
     try:
-        validate_local_snapshot_for_publish(snapshot_dir)
         coverage_path = layout.ocr_coverage
         if coverage_path is None:
             raise RuntimeError("explicit OCR snapshot lacks coverage.json")
-        manifest = OcrSnapshotManifest.model_validate_json(
-            coverage_path.read_text(encoding="utf-8")
-        )
+        if not snapshot_dir.is_dir():
+            raise FileNotFoundError(f"snapshot directory does not exist: {snapshot_dir}")
+        actual_names = {item.name for item in snapshot_dir.iterdir()}
+        if actual_names != set(SNAPSHOT_FILENAMES):
+            raise RuntimeError(
+                "snapshot directory must contain exactly: "
+                + ", ".join(SNAPSHOT_FILENAMES)
+            )
+        summary = load_ocr_snapshot_summary(coverage_path)
+        if summary.source_format == "ocr_v2_batch_union_v1":
+            manifest_v2 = validate_ocr_v2_snapshot(
+                snapshot_dir=snapshot_dir,
+                catalog_path=layout.catalog,
+                catalog_state_path=layout.catalog_state,
+            )
+            if manifest_v2.totals.expected_keyframes != len(catalog.frames):
+                raise RuntimeError("OCR v2 expected keyframes do not match frames.csv")
+        else:
+            validate_local_snapshot_for_publish(snapshot_dir)
         expected = {
             "catalog_sha256": catalog.sha256,
             "catalog_records": len(catalog.frames),
@@ -326,11 +426,13 @@ def _inspect_ocr(layout: OnlineLayout, catalog: FrameCatalog) -> ArtifactStatus:
             "observed_uid_sha256": catalog.uid_set_sha256,
         }
         for field, value in expected.items():
-            if getattr(manifest, field) != value:
+            if getattr(summary, field) != value:
                 raise RuntimeError(f"OCR snapshot {field} does not match frames.csv")
+        if layout.ocr.stat().st_size != summary.sqlite_bytes:
+            raise RuntimeError("OCR snapshot SQLite size does not match coverage.json")
         if status.availability != ArtifactAvailability.READY:
             raise RuntimeError(status.detail)
-        if status.record_count != manifest.fts_rows:
+        if status.record_count != summary.fts_rows:
             raise RuntimeError("OCR snapshot FTS row count does not match coverage.json")
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         return ArtifactStatus(
@@ -339,16 +441,22 @@ def _inspect_ocr(layout: OnlineLayout, catalog: FrameCatalog) -> ArtifactStatus:
             path=path,
             detail=f"explicit snapshot invalid: {error}",
         )
-    tiers = ",".join(sorted({batch.tier for batch in manifest.batches.values()})) or "unknown"
+    residual = ""
+    if summary.residual_frames is not None and summary.residual_regions is not None:
+        residual = (
+            f"residual_frames={summary.residual_frames}; "
+            f"residual_regions={summary.residual_regions}; "
+        )
     return ArtifactStatus(
         name="ocr",
         availability=ArtifactAvailability.READY,
         path=path,
-        record_count=manifest.fts_rows,
+        record_count=summary.fts_rows,
         detail=(
-            f"snapshot_id={manifest.snapshot_id}; intended_use={manifest.intended_use}; "
-            f"coverage={manifest.coverage_fraction:.2%}; tier={tiers}; "
-            f"errors={manifest.error_keyframes}; missing={manifest.missing_keyframes}; "
+            f"snapshot_id={summary.snapshot_id}; intended_use={summary.intended_use}; "
+            f"source_format={summary.source_format}; coverage={summary.coverage_fraction:.2%}; "
+            f"engines={summary.engines}; errors={summary.error_keyframes}; "
+            f"missing={summary.missing_keyframes}; {residual}"
             "integrity=ok; UID joins=valid; production_ready=false"
         ),
     )

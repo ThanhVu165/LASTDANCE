@@ -10,10 +10,13 @@ Chi tiết đợt sửa và phần chưa xác minh: [QUALIFIER_ACCEPTANCE_RUNBOO
 **Mức hiện tại: integration-ready cho KIS/QA/TRAKE và submission vòng sơ tuyển; chưa được
 phép gọi là accuracy-complete.** Offline visual đã đóng/PASS. Online Accuracy-Max và official
 export đã implement và bổ sung VerifiedFrameRef cho frame gốc ngoài catalog. QA gắn evidence,
-TRAKE giữ frame cùng shot. Code OCR v2 đã merge từ `97da0bd`; snapshot/index Online vẫn
-giữ bản hiện tại, adapter schema v3 và activation chưa thực hiện.
-ASR đang chạy Kaggle; chưa tải artifact và chưa tích hợp thật. Bộ
-kiểm tra thủ công/ground-truth cần chạy lại để chốt Recall/accuracy sau thay đổi Online/OCR.
+TRAKE giữ frame cùng shot. OCR v2 đã merge từ `97da0bd`, adapter schema v3 đã PASS và
+snapshot `ocr-snapshot-20260904T131724Z-66ecea73cce1` đang được chọn làm OCR duy nhất;
+không fallback về EasyOCR.
+ASR batch 02–09 và checkpoint bất biến của batch 01 tại HF revision
+`da510543ff05d2e5d44253527bf3b20d4ad5741d` đã được hợp nhất thành snapshot development
+và kích hoạt cho Online; batch 01 vẫn đang chạy Kaggle. Bộ kiểm tra thủ công/ground-truth
+cần chạy lại để chốt Recall/accuracy sau thay đổi Online/OCR/ASR.
 
 | Thành phần | Trạng thái | Evidence hiện hành |
 |---|---|---|
@@ -22,10 +25,10 @@ kiểm tra thủ công/ground-truth cần chạy lại để chốt Recall/accur
 | CLIP FAISS | `READY` | `IndexIDMap(IndexFlatIP)`, dim 512, 293.336 UID |
 | SigLIP FAISS | `READY` | `IndexIDMap(IndexFlatIP)`, dim 768, 293.336 UID |
 | EVA-CLIP FAISS | `READY` | `IndexIDMap(IndexFlatIP)`, dim 768, 293.336 UID |
-| OCR | `READY-DEVELOPMENT` | coverage 100% UID; 278.091 FTS row; 57 error; chưa final |
-| OCR v2 | `SNAPSHOT-VALIDATED-DEVELOPMENT` | 9/9 batch HF; local coverage 293.336/293.336 UID, 269.259 FTS row, 8.889 error; chưa chuyển Online/final |
-| ASR | `WAITING_KAGGLE` | người dùng xác nhận đang chạy; chờ hoàn tất mới tải HF |
-| Online core/UI | `IMPLEMENTED` | Streamlit trực tiếp `OnlineEngine`, health 200 |
+| OCR legacy | `NOT-SELECTED` | EasyOCR cũ không còn được runtime chọn; không fallback |
+| OCR v2 | `ACTIVE-DEVELOPMENT` | schema v3 READY; 293.336/293.336 UID, 269.259 FTS row, 8.889 error; chưa accuracy/final |
+| ASR | `ACTIVE-DEVELOPMENT` | 794/873 video verified (90,95%), 108.520 FTS row; 11 silent chưa proof, 68 missing/quarantine; batch 01 còn chạy |
+| Online core/UI | `ACTIVE-GEMINI-ONLY` | Streamlit PID 25676, health 200; planner/VLM/VQA Gemini-only, không read-timeout, VLM 1×8 |
 | Submission official | `IMPLEMENTED` | CSV/ZIP fail-closed theo AIC26 qualifier |
 | Accuracy acceptance | `OPEN` | evaluator/runner/freeze đã có; 60 phiếu gán nhãn trống đã tạo, chưa có nhãn người |
 
@@ -54,7 +57,7 @@ runtime catalog + ba FAISS/state + OCR snapshot khoảng 2,31 GiB. Data retentio
 
 ## OCR hiện hành
 
-### Recognition v2 đã xong, chưa thay artifact Online
+### OCR v2 đã kích hoạt trong Online
 
 Entry point nhóm nhận: [OCR_V2_ONLINE_HANDOFF.md](OCR_V2_ONLINE_HANDOFF.md).
 Người dùng hoãn chấm ground truth của audit OCR v2 để bàn giao development kịp thi;
@@ -84,7 +87,7 @@ batch 03/07/09 được chứng minh tương đương theo member hash rồi ch�
 Snapshot OCR v2 local đã qua validator độc lập:
 
 ```text
-ocr-snapshot-20260904T081629Z-66ecea73cce1
+ocr-snapshot-20260904T131724Z-66ecea73cce1
 coverage=293336/293336 UID (100%)
 fts_rows=269259
 success=269259
@@ -92,29 +95,28 @@ no_text=15188
 error=8889
 residual_frames=240976
 residual_regions=763395
-sqlite_sha256=9b80eed3ef376655b6a4ad6c9496072f2cf215dec38f5af9e5095ebb491ed78e
+sqlite_sha256=5cc586b14af1eebe3f7444b1a27bccd5d94d2ff099e4cd7e20566b7e25156505
 complete=false
 production_ready=false
 ```
 
-Preflight consumer chỉ đọc đã xác nhận `online.fts.FtsSearcher` truy vấn trực tiếp SQLite
-thành công với các probe `giá dầu mazut`, `Việt Nam`, `Hà Nội` và `2026`. Handoff chưa được
-bật: `online.artifacts.ArtifactRegistry` hiện parse `coverage.json` bằng manifest EasyOCR
-schema 1/2 nên từ chối OCR v2 schema 3/`ocr_v2_batch_union_v1`. Đây là thay đổi Nhánh 2 cần
-được yêu cầu riêng; không đổi `AIC_OCR_SNAPSHOT_DIR` trước khi có adapter + regression test.
+Adapter consumer đã dispatch đúng schema 1/2/3; v3 gọi validator riêng với catalog/state,
+đọc `totals`, engine và residual thật. Regression test valid legacy/v3, tamper, catalog lệch
+và schema lạ đều PASS. Preflight snapshot thật báo OCR `READY`;
+`online.fts.FtsSearcher` trả kết quả cho `giá dầu mazut`, `Việt Nam`, `Hà Nội`, `2026` và
+12/12 hit mẫu ánh xạ đúng UID/video/frame catalog. `AIC_OCR_SNAPSHOT_DIR` được đặt lâu dài
+tới snapshot v2 build local; không fallback về EasyOCR và không gọi model/GPU/API.
 
-Xem
-[runbook recognition](OCR_V2_PRODUCTION_RUNBOOK.md) và
-[runbook snapshot](OCR_V2_SNAPSHOT_RUNBOOK.md). Chưa thay snapshot hay consumer Online;
-không gọi model/GPU/API từ máy Codex.
+Xem [runbook recognition](OCR_V2_PRODUCTION_RUNBOOK.md) và
+[runbook snapshot](OCR_V2_SNAPSHOT_RUNBOOK.md).
 
-### Artifact EasyOCR development đang dùng (không đổi)
+### Artifact EasyOCR cũ (không còn được chọn)
 
 Nguồn EasyOCR hiện tại là chín archive tại HF revision
 `a5dcff74326f43421553481793d4a1e51eb59ce5`. Archive checksum, manifest, catalog SHA,
 partition 873 video và layer completion gate đã verify trước khi build local.
 
-Snapshot đang dùng:
+Snapshot lịch sử:
 
 ```text
 ocr-snapshot-20260828T153736Z-65e6f8bf8850
@@ -133,14 +135,8 @@ thành `no_text`/success giả. Batch 02 có 47 và batch 03 có 10 error; bảy
 frame-level completion gate. Snapshot vẫn dùng được cho Online visible-text retrieval vì
 SQLite/integrity/UID join hợp lệ, nhưng không phải artifact OCR v2 hoặc OCR final.
 
-Online chọn snapshot bằng:
-
-```powershell
-$env:AIC_OCR_SNAPSHOT_DIR = "$env:AIC_DATA\ocr\snapshots\ocr-snapshot-20260828T153736Z-65e6f8bf8850"
-```
-
-Streamlit hiện đã restart với biến này và health endpoint trả HTTP 200. Registry/UI hiện
-snapshot ID, tier, coverage, error/missing và `production_ready=false`.
+Runtime không chọn snapshot này. Theo quyết định hiện hành, chỉ OCR v2 được cấu hình và
+không có fallback về EasyOCR.
 
 ## Online Accuracy-Max đã implement
 

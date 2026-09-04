@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections import defaultdict
 
 import streamlit as st
@@ -33,6 +34,37 @@ st.set_page_config(page_title="LASTDANCE Online", layout="wide")
 @st.cache_resource(show_spinner="Loading and validating production artifacts...")
 def _engine() -> OnlineEngine:
     return OnlineEngine.from_environment(deep_preflight=False)
+
+
+def _configure_required_gemini() -> None:
+    """Bind a session-only API key before constructing the cached Online engine."""
+    existing = os.environ.get("GEMINI_API_KEY", "").strip()
+    entered = st.sidebar.text_input(
+        "Gemini API key",
+        type="password",
+        placeholder="Configured for this server" if existing else "Required",
+        help="Kept only in this Streamlit process; never written to the repository.",
+        key="gemini-api-key",
+    ).strip()
+    if entered and entered != existing:
+        os.environ["GEMINI_API_KEY"] = entered
+        _engine.clear()
+        existing = entered
+    latency_profile = {
+        "AIC_GEMINI_ONLY": "1",
+        "AIC_GEMINI_MODEL": "gemini-3.5-flash-lite",
+        "AIC_GEMINI_PLANNER_TIMEOUT_SECONDS": "0",
+        "AIC_GEMINI_REQUEST_TIMEOUT_SECONDS": "0",
+        "AIC_ENABLE_QWEN_VQA": "0",
+    }
+    if any(os.environ.get(name) != value for name, value in latency_profile.items()):
+        os.environ.update(latency_profile)
+        _engine.clear()
+    if not existing:
+        st.sidebar.error("Nhập GEMINI_API_KEY để chạy Gemini-only.")
+        st.info("Hệ thống đang ở chế độ Gemini bắt buộc và sẽ không fallback sang Qwen/rule.")
+        st.stop()
+    st.sidebar.success("Gemini 3.5 Flash Lite · không fallback")
 
 
 def _split_editor_values(value: object) -> list[str]:
@@ -737,6 +769,7 @@ def _query_selector() -> tuple[QuerySpec, list[QuerySpec]]:
 
 def main() -> None:
     st.title("LASTDANCE · Accuracy-Max Online")
+    _configure_required_gemini()
     try:
         engine = _engine()
     except Exception as error:
@@ -767,7 +800,7 @@ def main() -> None:
         )
     if analyze_clicked:
         try:
-            with st.spinner("Gemini/Qwen đang tách locator, target và task evidence..."):
+            with st.spinner("Gemini đang tách locator, target và task evidence..."):
                 plan_store[spec.query_name] = engine.plan(spec)
                 current_run = st.session_state.get("search_run")
                 if (

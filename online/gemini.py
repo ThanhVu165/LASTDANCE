@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import threading
 import time
 import urllib.error
@@ -73,20 +74,79 @@ def get_gemini_quota_manager() -> GeminiQuotaManager:
     return _QUOTA
 
 
+_TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
+
+
+def request_gemini_json(
+    request: urllib.request.Request,
+    *,
+    timeout: float | None,
+    estimated_tokens: int,
+    opener: Any | None = None,
+) -> dict[str, Any]:
+    """Send one logical Gemini request with bounded transient-error retries."""
+    max_attempts = max(1, int(os.environ.get("AIC_GEMINI_TRANSIENT_MAX_ATTEMPTS", "6")))
+    base_delay = max(0.0, float(os.environ.get("AIC_GEMINI_RETRY_BASE_SECONDS", "1.5")))
+    open_options = {} if timeout is None else {"timeout": timeout}
+    open_call = opener or urllib.request.urlopen
+    last_detail = ""
+    for attempt in range(1, max_attempts + 1):
+        _QUOTA.acquire(estimated_tokens)
+        try:
+            with open_call(request, **open_options) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise RuntimeError("Gemini HTTP response must be a JSON object")
+            return payload
+        except urllib.error.HTTPError as error:
+            last_detail = error.read().decode("utf-8", errors="replace")[:1000]
+            if error.code not in _TRANSIENT_HTTP_CODES or attempt >= max_attempts:
+                raise RuntimeError(
+                    f"Gemini HTTP {error.code} after {attempt} attempt(s): {last_detail}"
+                ) from error
+            retry_after = error.headers.get("Retry-After") if error.headers else None
+            try:
+                delay = float(retry_after) if retry_after else base_delay * (2 ** (attempt - 1))
+            except ValueError:
+                delay = base_delay * (2 ** (attempt - 1))
+            delay = min(30.0, delay) + random.uniform(0.0, min(1.0, base_delay / 3.0))
+            time.sleep(delay)
+        except (TimeoutError, urllib.error.URLError, OSError) as error:
+            last_detail = str(error)
+            if attempt >= max_attempts:
+                raise RuntimeError(
+                    f"Gemini transport failed after {attempt} attempt(s): {last_detail}"
+                ) from error
+            delay = min(30.0, base_delay * (2 ** (attempt - 1)))
+            time.sleep(delay + random.uniform(0.0, min(1.0, base_delay / 3.0)))
+    raise RuntimeError(f"Gemini request failed: {last_detail}")
+
+
 class GeminiJsonClient:
     def __init__(
         self,
         api_key: str,
         *,
         model: str | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model or os.environ.get("AIC_GEMINI_MODEL", "gemini-3.5-flash-lite")
-        self.timeout = timeout
+        raw_timeout = timeout if timeout is not None else os.environ.get(
+            "AIC_GEMINI_REQUEST_TIMEOUT_SECONDS", "20"
+        )
+        normalized_timeout = str(raw_timeout).strip().casefold()
+        self.timeout = None if normalized_timeout in {"0", "none", "off"} else float(raw_timeout)
+        if self.timeout is not None and self.timeout <= 0:
+            raise ValueError("Gemini request timeout must be positive or 0 to disable")
 
-    def generate(self, parts: list[dict[str, Any]], *, estimated_tokens: int = 4096) -> dict[str, Any]:
-        _QUOTA.acquire(estimated_tokens)
+    def generate(
+        self,
+        parts: list[dict[str, Any]],
+        *,
+        estimated_tokens: int = 4096,
+        max_output_tokens: int = 512,
+    ) -> dict[str, Any]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         body = json.dumps(
             {
@@ -94,6 +154,7 @@ class GeminiJsonClient:
                 "generationConfig": {
                     "temperature": 0.0,
                     "responseMimeType": "application/json",
+                    "maxOutputTokens": max_output_tokens,
                 },
             }
         ).encode("utf-8")
@@ -106,12 +167,11 @@ class GeminiJsonClient:
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")[:1000]
-            raise RuntimeError(f"Gemini HTTP {error.code}: {detail}") from error
+        payload = request_gemini_json(
+            request,
+            timeout=self.timeout,
+            estimated_tokens=estimated_tokens,
+        )
         text = payload["candidates"][0]["content"]["parts"][0]["text"]
         value = text.strip()
         if value.startswith("```"):

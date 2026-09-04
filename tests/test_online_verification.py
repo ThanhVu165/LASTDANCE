@@ -53,9 +53,9 @@ class OnlineVerificationTests(unittest.TestCase):
         )
         self.assertEqual(warnings, [])
         self.assertTrue(result[0].vlm_verified)
-        self.assertAlmostEqual(result[0].video_score, 0.7 * 0.6 + 0.2 * 1.0 + 0.1 * 0.5)
-        self.assertEqual([item.frame_id for item in result[0].best_frames], [20, 10])
-        self.assertAlmostEqual(result[0].best_frames[0].final_score, 0.7 * 0.8 + 0.3)
+        self.assertAlmostEqual(result[0].video_score, 0.85 * 0.6 + 0.1 * 1.0 + 0.05 * 0.5)
+        self.assertEqual([item.frame_id for item in result[0].best_frames], [10, 20])
+        self.assertAlmostEqual(next(item for item in result[0].best_frames if item.frame_id == 20).final_score, 0.85 * 0.8 + 0.15)
         self.assertEqual(result[0].missing_scenes, ["scene two"])
 
     def test_verifier_failure_keeps_retrieval_scores(self):

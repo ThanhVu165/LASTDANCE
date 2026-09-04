@@ -14,6 +14,7 @@ from typing import Any, Iterable
 from shared.interfaces import QueryPlanner
 from shared.schemas.online import QueryRole, TaskType, UnifiedQueryPlan
 
+from .gemini import request_gemini_json
 from .qwen_runtime import get_qwen_components
 
 
@@ -56,7 +57,7 @@ _DESCRIPTIVE_TEXT_COUNT = re.compile(
 )
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
-DEFAULT_GEMINI_PLANNER_TIMEOUT_SECONDS = 45.0
+DEFAULT_GEMINI_PLANNER_TIMEOUT_SECONDS = 35.0
 
 
 def _scenes(text: str) -> list[str]:
@@ -766,15 +767,12 @@ def _validate_provider_plan(
 
 
 class GeminiQueryPlanner(QueryPlanner):
-    def __init__(self, api_key: str, *, model: str = DEFAULT_GEMINI_MODEL, timeout: float = 12.0) -> None:
+    def __init__(self, api_key: str, *, model: str = DEFAULT_GEMINI_MODEL, timeout: float | None = 12.0) -> None:
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
 
     def plan(self, text: str, task_type: TaskType) -> UnifiedQueryPlan:
-        from .gemini import get_gemini_quota_manager
-
-        get_gemini_quota_manager().acquire(estimated_tokens=2048)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         prompt = f"{_PLANNER_SYSTEM}\nTask: {task_type.value}\nRaw query: {text}"
         body = json.dumps(
@@ -784,6 +782,7 @@ class GeminiQueryPlanner(QueryPlanner):
                     "temperature": 0.0,
                     "responseMimeType": "application/json",
                     "responseSchema": _GEMINI_RESPONSE_SCHEMA,
+                    "maxOutputTokens": 1024,
                 },
             }
         ).encode("utf-8")
@@ -796,16 +795,12 @@ class GeminiQueryPlanner(QueryPlanner):
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            try:
-                detail = error.read().decode("utf-8", errors="replace")[:1000]
-            except Exception:
-                detail = ""
-            suffix = f": {detail}" if detail else ""
-            raise RuntimeError(f"Gemini HTTP {error.code}{suffix}") from error
+        payload = request_gemini_json(
+            request,
+            timeout=self.timeout,
+            estimated_tokens=2048,
+            opener=urllib.request.urlopen,
+        )
         result = payload["candidates"][0]["content"]["parts"][0]["text"]
         return _validate_provider_plan(text.strip(), _extract_json(result), "gemini", task_type)
 
@@ -902,6 +897,9 @@ def get_query_planner(environment: dict[str, str] | None = None) -> PlannerChain
     values = os.environ if environment is None else environment
     providers: list[QueryPlanner] = []
     api_key = values.get("GEMINI_API_KEY", "").strip()
+    gemini_only = values.get("AIC_GEMINI_ONLY", "0").strip() == "1"
+    if gemini_only and not api_key:
+        raise RuntimeError("GEMINI_API_KEY is required when AIC_GEMINI_ONLY=1")
     if api_key:
         requested_model = values.get("AIC_GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip()
         model = requested_model or DEFAULT_GEMINI_MODEL
@@ -909,15 +907,22 @@ def get_query_planner(environment: dict[str, str] | None = None) -> PlannerChain
             "AIC_GEMINI_PLANNER_TIMEOUT_SECONDS",
             str(DEFAULT_GEMINI_PLANNER_TIMEOUT_SECONDS),
         ).strip()
-        try:
-            planner_timeout = float(raw_timeout)
-        except ValueError as error:
-            raise ValueError(
-                "AIC_GEMINI_PLANNER_TIMEOUT_SECONDS must be a positive number"
-            ) from error
-        if planner_timeout <= 0:
-            raise ValueError("AIC_GEMINI_PLANNER_TIMEOUT_SECONDS must be a positive number")
+        if raw_timeout.casefold() in {"0", "none", "off"}:
+            planner_timeout = None
+        else:
+            try:
+                planner_timeout = float(raw_timeout)
+            except ValueError as error:
+                raise ValueError(
+                    "AIC_GEMINI_PLANNER_TIMEOUT_SECONDS must be positive or 0 to disable"
+                ) from error
+            if planner_timeout <= 0:
+                raise ValueError(
+                    "AIC_GEMINI_PLANNER_TIMEOUT_SECONDS must be positive or 0 to disable"
+                )
         providers.append(GeminiQueryPlanner(api_key, model=model, timeout=planner_timeout))
+    if gemini_only:
+        return PlannerChain(providers)
     model_id = values.get("AIC_QWEN_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
     default_worker = "1" if os.name == "nt" else "0"
     if values.get("AIC_TORCH_WORKER", default_worker) != "0":

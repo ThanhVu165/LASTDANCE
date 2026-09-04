@@ -143,11 +143,11 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
   so confidence chéo model. Gate B chỉ có evidence runtime/visual, không giả PASS định lượng.
   Bốn worker chia nguyên batch bằng số region thật, cùng input revision, checkpoint local
   từng minibatch + HF verified, namespace riêng, fail closed khi sync lỗi. Recognition worker
-  đã hoàn tất 9/9 batch T4/HF thật; snapshot schema v3 local đã validate, adapter Online
-  còn thiếu. Người dùng hoãn ground truth để bàn giao development, không giả quality PASS;
-  xem `docs/OCR_V2_ONLINE_HANDOFF.md`. Không gán
-  output mới thành engine/tier cũ. Giữ snapshot EasyOCR đang phục vụ Online cho tới khi
-  handoff tương thích đã validate. Same-shot reuse vẫn cần đồng thời pass embedding cosine,
+  đã hoàn tất 9/9 batch T4/HF thật; snapshot schema v3 local đã validate và adapter Online
+  đã kích hoạt fail-closed. Người dùng hoãn ground truth để bàn giao development, không giả
+  quality PASS; xem `docs/OCR_V2_ONLINE_HANDOFF.md`. Không gán output mới thành engine/tier
+  cũ. Theo quyết định người dùng, runtime chỉ chọn OCR v2 và không fallback về EasyOCR.
+  Same-shot reuse vẫn cần đồng thời pass embedding cosine,
   CRAFT layout, crop SSIM và crop pHash; embedding không gate `no_text`.
 - **BEiT-3 đã bị loại vĩnh viễn khỏi kiến trúc.** Không mở lại audit/checksum/conversion
   Microsoft UniLM; modality thứ ba chính thức là EVA-CLIP với checkpoint safetensors đã pin.

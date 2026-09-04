@@ -275,9 +275,10 @@ Pipeline dưới đây thay các chỉ dẫn production OCR cũ; không xóa arc
 Planner/recognition worker v2 đã chạy xong chín batch trên bốn Kaggle T4 và upload result/
 report content-addressed có `HF_VERIFIED`. Migration/union/SQLite schema v3 đã được viết và
 qua fixture CPU chín batch. Snapshot development dữ liệu thật
-`ocr-snapshot-20260904T081629Z-66ecea73cce1` đã materialize/validate local đủ 293.336 UID,
-269.259 FTS row; vẫn `complete=false`, `production_ready=false` và chưa chuyển consumer
-Online. Gate B và thử làm nét không phải runner bốn worker.
+Snapshot được build lại từ cùng source thành
+`ocr-snapshot-20260904T131724Z-66ecea73cce1`, đã validate đủ 293.336 UID/269.259 FTS row
+và được consumer Online chọn làm OCR duy nhất. Nó vẫn `complete=false`,
+`production_ready=false`. Gate B và thử làm nét không phải runner bốn worker.
 Xem [production runbook](OCR_V2_PRODUCTION_RUNBOOK.md) và
 [snapshot runbook](OCR_V2_SNAPSHOT_RUNBOOK.md).
 
@@ -443,8 +444,8 @@ class OcrResult(BaseModel):
   region thật `vietocr|paddle|unresolved`, không gán thành EasyOCR/Vintern hay tier cũ.
   `shared/schemas/ocr.py` và năm cột SQL không đổi. Source được pin theo HF revision/hash;
   builder local kiểm chín shard UID disjoint/exhaustive, report/signature/checksum rồi mới
-  atomic-publish snapshot development. Consumer Online chưa đổi; nếu cần sửa `online/`
-  hoặc `app/`, dừng phần tích hợp đó và báo người dùng trước, không sửa chéo.
+  atomic-publish snapshot development. Consumer Online dispatch schema/source format, dùng
+  validator v2 với catalog/state và fail closed khi schema/checksum/catalog/UID lệch.
 - Lát cắt recognition hiện có xuất `ocr_v2_frame_selection_v1` trong
   `frame-selections.jsonl`, raw `predictions.jsonl`, `residual.jsonl`, report/signature và
   checksums. Đây **không** phải terminal envelope hoặc Online snapshot. Mỗi region giữ
@@ -463,7 +464,7 @@ class OcrResult(BaseModel):
   giữ đọc snapshot lịch sử; v2 không giả chạy Vintern cho các field lịch sử.
 - Chỉ `success` nạp FTS; `no_text/error/missing` vẫn đếm trong coverage. Đủ UID không
   đồng nghĩa accuracy hay Publishing Ready. Nhánh 2 đọc snapshot ID/provenance, không
-  cache như final; chưa đổi snapshot Online đang chạy khi mới chốt spec.
+  cache như final. Runtime hiện chọn tường minh snapshot v2; không fallback về EasyOCR.
 - Bốn worker không ghi chung SQLite/mutable checkpoint. Builder local validate chín
   shard disjoint/exhaustive so với `frames.csv`, reject duplicate/foreign/missing rồi
   mới atomic-build một SQLite. Dev-subset không phải batch thứ mười. Final yêu cầu
@@ -617,8 +618,15 @@ bằng 0. Verification gồm audio SHA-256, người review và đường dẫn 
 phải khớp audio. Không đổi inference rỗng thành bằng chứng im lặng. Segment không vượt duration.
 SQLite và `asr.coverage.json` phải khớp checksum/size, catalog SHA, số dòng và trạng thái từng
 video, UID cùng video và nearest-PTS alignment. Online từ chối cặp file chưa đồng bộ; sidecar
-không có hoặc sai thì ASR INVALID, visual vẫn hoạt động. `--allow-partial` chỉ phục vụ development;
-không nâng `production_ready`. Snapshot ASR giữ bất biến và `complete=false`.
+không có hoặc sai thì ASR INVALID, visual vẫn hoạt động. `--allow-partial` chỉ phục vụ development,
+chỉ được publish khi coverage >90% và error fraction <5%; không nâng `production_ready`.
+Snapshot ASR giữ bất biến và `complete=false`.
+
+Khi hợp nhất archive/checkpoint, phải pin HF revision, kiểm manifest/checksum/catalog và tính
+atomic của cặp checkpoint JSONL/state. Batch overlap chỉ được dedupe khi nội dung ASR tương
+đương sau khi bỏ metadata vị trí batch; kết quả khác nhau phải quarantine. Segment vượt audio
+duration phải clamp/drop theo duration đã đối chiếu inventory và tính lại nearest
+`keyframe_uid`, đồng thời ghi audit; không được nới duration để hợp thức hóa timestamp.
 
 Online chỉ tăng trọng số ASR khi `UnifiedQueryPlan.spoken_text` không rỗng. Video thiếu
 ASR coverage phải hiện rõ để thí sinh dùng human-in-the-loop, không im lặng diễn giải kết
@@ -704,9 +712,12 @@ Visual lỗi làm Online `NOT_READY`. OCR/ASR được phân loại độc lập
 Production OCR mặc định ở `$AIC_DATA/index/ocr.sqlite`. Snapshot development chỉ được chọn
 bằng `AIC_OCR_SNAPSHOT_DIR=<snapshot directory>`; registry phải verify đúng ba file
 `ocr.sqlite`, `coverage.json`, `SHA256SUMS`, checksum, catalog SHA/count/video/UID-set,
-FTS5 count/integrity và join `(video_id,keyframe_uid)`. UI/provenance phải hiện snapshot ID,
-tier, coverage, error/missing và `production_ready=false`; cấm copy/đổi tên snapshot thành
-artifact final.
+FTS5 count/integrity và join `(video_id,keyframe_uid)`. Registry dispatch fail-closed theo
+`schema_version`/`source_format`: schema 1/2 dùng manifest legacy, schema 3
+`ocr_v2_batch_union_v1` dùng validator v2 với catalog/state; schema lạ là `INVALID`, không
+fallback về OCR cũ. UI/provenance phải hiện snapshot ID, source format, tier legacy hoặc
+engine thật v2, coverage, error/missing/residual và `production_ready=false`; cấm copy/đổi
+tên snapshot thành artifact final.
 
 Data retention của máy thi được chia ba lớp:
 
@@ -1006,7 +1017,7 @@ Lệnh và tình trạng thực nghiệm: `docs/QUALIFIER_ACCEPTANCE_RUNBOOK.md`
 | Frame recall baseline | CLIP ViT-B/32 | Local/Kaggle | ~300 MB | Rollback an toàn |
 | Frame recall nâng cao | SigLIP + EVA-CLIP | Kaggle GPU (offline) | N/A (chạy batch, không online) | Build index nền |
 | OCR v2 bbox nguồn | CRAFT cache trong 9 archive EasyOCR | Đọc artifact, không chạy detector lại | Không load model | 293.336 UID nguồn; snapshot EasyOCR cũ vẫn development-only |
-| OCR v2 mặc định | VietOCR vgg_seq2seq | Kaggle T4, bốn worker | Peak theo report từng batch; batch 64, giảm khi OOM | Chín batch recognition HF verified; snapshot development local đã validate đủ UID, chưa final/Online |
+| OCR v2 mặc định | VietOCR vgg_seq2seq | Kaggle T4, bốn worker | Peak theo report từng batch; batch 64, giảm khi OOM | Chín batch HF verified; snapshot schema v3 đủ UID đang active trong Online, chưa accuracy/final |
 | OCR v2 có điều kiện | latin_PP-OCRv5_mobile_rec | Kaggle T4, process/pha riêng | Đo peak trong canary; batch 128, giảm khi OOM | Guard/override §2.2, không so confidence chéo model |
 | OCR residual tùy chọn | Gemini, model pin sau canary được duyệt | Cloud API | 0 MB | Chưa gọi; exact count/token/cost và duyệt riêng; không chặn bản development |
 | Reranking | Temporal neighbors + video evidence + VLM verification | Local CPU + Gemini/Qwen tùy chọn | Qwen peak đo thật ~4,19 GiB | VLM lỗi giữ retrieval score |
@@ -1038,8 +1049,8 @@ Quy tắc: Pydantic schema định nghĩa trong `shared/`, dùng chung giữa `o
 | # | Câu hỏi | Ảnh hưởng nếu không xác nhận trước |
 |---|---|---|
 | 1 | Accuracy regression trên bộ kiểm tra thủ công chưa đạt acceptance target đã đặt | Không tuyên bố baseline accuracy-complete chỉ từ preflight/test contract; phải chạy lại ground-truth Recall@12/100 |
-| 2 | Online vẫn dùng snapshot EasyOCR development, còn 57 error; OCR v2 snapshot development đã validate nhưng consumer chưa handoff | Không gọi accuracy/production-ready; phải kiểm tra consumer trước khi chuyển |
-| 3 | `asr.sqlite` chưa có | Spoken-text query chạy visual-only có warning; đây là lỗ hổng recall còn thật |
+| 2 | OCR v2 đang active nhưng còn 8.889 frame error và 763.395 residual region; chưa có ground truth accuracy | Không gọi accuracy/production-ready chỉ từ coverage/preflight; tiếp tục review/acceptance riêng |
+| 3 | ASR development mới cover 794/873 video; batch 01 còn chạy, 11 silent chưa proof và 1 video overlap xung đột bị quarantine | Spoken-text query đã dùng 108.520 FTS row nhưng vẫn cảnh báo partial; cần rebuild snapshot khi batch 01 hoàn tất |
 | 4 | Gemini cloud model/quota có thể đổi | Pin bằng config lúc thi, rate-limit, giữ Qwen/rule fallback và prefetch local snapshot |
 
 Không dùng HTTP 200, đủ 100 dòng hoặc artifact `READY` để suy ra accuracy PASS. Mọi tuyên bố
@@ -1064,6 +1075,30 @@ accuracy phải gắn bộ query/ground truth, revision/config và metric tái l
 ---
 
 ## Changelog
+
+- **04/09/2026 (Gemini-only latency hotfix)** — Theo yêu cầu người dùng, profile Online thi
+  bắt buộc Gemini cho query planner, VLM verification và VQA; không fallback Qwen/rule khi
+  Gemini timeout/lỗi. Không đặt read-timeout cho planner/request; giữ JSON output 1.024/512 token, JPEG
+  quality 75 và giảm verification từ 4×36 xuống 1 video × 8 frame để mỗi video chỉ gửi một
+  contact sheet; quota session deadline 3.600 giây. Streamlit nhận API key bằng password input
+  theo session khi environment chưa có key. Lỗi/429/503 Gemini ở VLM sau tối đa 6 retry giữ nguyên artifact retrieval score và không gắn VLM verified; planner retry 429/500/502/503/504 bằng Retry-After/exponential backoff; không gọi model fallback. Fusion VLM thành boost-only với artifact weight 0,85.
+
+- **04/09/2026 (kích hoạt ASR partial Online)** — Pin HF dataset `Vu165/lastdance-asr`
+  revision `da510543ff05d2e5d44253527bf3b20d4ad5741d`, tải chỉ archive batch 02–09 và cặp
+  checkpoint JSONL/state batch 01, không tải audio và không tác động job Kaggle. Handoff
+  kiểm manifest/hash/catalog, hợp nhất 911 record thành 805 video: dedupe 104 overlap tương
+  đương, quarantine `L26_V277` do hai transcript khác nhau, clamp + realign 14 segment đuôi
+  vượt duration. Snapshot `asr-snapshot-20260904T135520Z-6fa94edda90a` có 108.520 FTS row,
+  794/873 video verified (90,95%), 11 silent chưa proof, 68 missing/quarantine, 0 error;
+  publish development với `complete=false`, `production_ready=false`. Online registry xác
+  nhận ASR READY cùng OCR v2; batch 01 tiếp tục chạy để thay bằng snapshot đầy đủ sau.
+
+- **04/09/2026 (kích hoạt OCR v2 Online)** — Theo yêu cầu người dùng, Online chỉ dùng snapshot
+  v2 được chọn tường minh, không fallback/rollback sang EasyOCR. Registry và provenance hỗ
+  trợ song song schema legacy 1/2 và schema 3 nhưng runtime máy này trỏ cố định tới
+  `ocr-snapshot-20260904T131724Z-66ecea73cce1`; schema lạ, checksum/catalog/UID/SQLite lệch
+  đều `INVALID`. Preflight snapshot thật và bốn query FTS/mapping đều PASS; artifact vẫn là
+  development với `complete=false`, `production_ready=false` vì accuracy chưa được chấm.
 
 - **04/09/2026 — qualifier audit theo plan đã được người dùng duyệt:** cho phép source frame
   đã xác thực ngoài catalog; giữ retrieval UID; QA structured evidence và review; TRAKE giữ

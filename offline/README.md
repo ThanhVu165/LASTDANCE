@@ -255,9 +255,11 @@ dưới `data/index` và không được commit vào Git.
    - faster-whisper large-v3 + Silero VAD filter (mặc định)
    - Checkpoint mỗi 5 video, push batch archival lên HF Dataset
 
-3. **Local snapshot builder:** Union JSONL từ 9 batch → `asr.sqlite` (FTS5, 7 cột khớp
-   contract `online/fts.py`) + `coverage.json`
-   - Source: `data/hf-cache/asr/archives/batch-XX/`
+3. **Local handoff + snapshot builder:** pin HF revision, validate manifest/checkpoint,
+   dedupe overlap tương đương, quarantine conflict và chuẩn hóa timestamp có audit; sau đó
+   build union JSONL → `asr.sqlite` (FTS5, 7 cột khớp `online/fts.py`) + `coverage.json`
+   - Source: `data/asr/hf-staging/asr/archives/` và `asr/checkpoints/`
+   - Handoff: `python -m scripts.materialize_asr_handoff` → union JSONL + audit JSON
    - Output: `data/asr/snapshots/asr-snapshot-...`
 
 4. **Publish:** Atomic copy snapshot vào `data/index/asr.sqlite` (Online đã mount sẵn)

@@ -155,11 +155,12 @@ Kết quả coverage mong đợi từ các source này:
 region residual; residual và unresolved không phải cùng một tập. Không đổi error thành
 no_text; không gán engine mới thành EasyOCR/Vintern để qua schema cũ.
 
-## 5. Phần nhóm Online cần làm trước khi bật snapshot v2
+## 5. Tích hợp Online đã hoàn tất
 
-Hiện `online/artifacts.py::_inspect_ocr` gọi validator legacy rồi parse
-`OcrSnapshotManifest` schema 1/2; nó sẽ từ chối schema 3. FTS reader truy vấn trực tiếp DB
-được, nhưng **chỉ đổi biến môi trường là chưa đủ**. Nhóm Online cần:
+Ngày 04/09/2026, `online/artifacts.py::_inspect_ocr` đã dispatch validator/parser theo
+`schema_version` và `source_format`. Snapshot schema 3 được kiểm bằng catalog/state thật;
+schema 1/2 vẫn đọc tương thích và schema lạ bị `INVALID`, không fallback. Các mục dưới đây
+đã được thực hiện:
 
 1. Dispatch theo `schema_version`/`source_format` cho **cả validator và parser**. Schema 3
    dùng `offline.ocr_v2_snapshot.validate_ocr_v2_snapshot` với catalog/state đúng, và
@@ -178,15 +179,14 @@ Hiện `online/artifacts.py::_inspect_ocr` gọi validator legacy rồi parse
    file bị sửa/checksum sai/catalog lệch/schema lạ phải INVALID, không fallback âm thầm.
    Smoke các query `giá dầu mazut`, `Việt Nam`, `Hà Nội`, `2026` rồi kiểm frame mapping.
    Smoke không phải accuracy benchmark.
-5. Sau khi adapter + test PASS mới cấu hình và restart process Online:
+5. Adapter + test và preflight snapshot thật đã PASS. Runtime máy hiện hành chọn:
 
    ```powershell
-   $env:AIC_OCR_SNAPSHOT_DIR = $snapshot
+   $env:AIC_OCR_SNAPSHOT_DIR = "$env:AIC_DATA\ocr\snapshots\ocr-snapshot-20260904T131724Z-66ecea73cce1"
    ```
 
-Giữ snapshot cũ để rollback:
-`ocr-snapshot-20260828T153736Z-65e6f8bf8850`. Muốn rollback thì trỏ biến môi trường về
-thư mục cũ, restart và validate lại; không overwrite `ocr.sqlite` final hoặc sửa checksum.
+Theo quyết định người dùng, runtime chỉ dùng OCR v2 và không cấu hình rollback/fallback sang
+EasyOCR. Snapshot cũ không được chọn. Không overwrite `ocr.sqlite` final hoặc sửa checksum.
 
 ## 6. Kiểm thử và phạm vi đã xác minh
 
@@ -204,8 +204,9 @@ python -m unittest discover -s tests -q
 Trước commit bàn giao: **305/305 test PASS trên Windows Python 3.11.9**; fixture Gate A
 CSV đã sửa đúng cột `video_id`, review notebook đã regenerate từ source hiện hành.
 Snapshot thật đã qua validator độc lập. Model T4/HF evidence đến từ production đã chạy,
-không chạy lại GPU trong đợt commit này. Adapter/activation Online **chưa triển khai**.
-Profile artifact tối thiểu đã clean-install trong venv Python 3.11.9, chạy 3/3 test
+không chạy lại GPU trong đợt này. Adapter/activation Online đã triển khai và preflight
+snapshot thật báo `READY`; toàn bộ 356 test PASS. Profile artifact tối thiểu đã clean-install
+trong venv Python 3.11.9, chạy 3/3 test
 snapshot và validate SQLite thật thành công; không cần dependency model từ offline profile.
 Ground-truth accuracy **chưa kiểm định**, được người dùng hoãn, không phải gate PASS.
 

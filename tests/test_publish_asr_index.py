@@ -37,9 +37,9 @@ class PublishAsrIndexTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "unverified"):
                 publish_asr_index(destination, data_root=root / "data")
-            output = publish_asr_index(destination, data_root=root / "data", allow_partial=True)
-            self.assertTrue(output.is_file())
-            self.assertTrue((root / "data" / "index" / "asr.coverage.json").is_file())
+            with self.assertRaisesRegex(RuntimeError, "greater than 90%"):
+                publish_asr_index(destination, data_root=root / "data", allow_partial=True)
+            self.assertFalse((root / "data" / "index" / "asr.sqlite").exists())
         finally:
             shutil.rmtree(root, ignore_errors=True)
 

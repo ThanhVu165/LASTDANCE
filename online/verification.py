@@ -54,7 +54,7 @@ def _contact_sheets(
     result: list[Image.Image] = []
     for offset in range(0, len(frames), sheet_size):
         chunk = frames[offset : offset + sheet_size]
-        panel_width, image_height, label_height = 224, 224, 26
+        panel_width, image_height, label_height = 192, 192, 24
         columns = min(4, len(chunk))
         rows = math.ceil(len(chunk) / columns)
         sheet = Image.new("RGB", (columns * panel_width, rows * (image_height + label_height)), "white")
@@ -91,13 +91,15 @@ def _contact_sheets(
 
 
 def _prompt(plan: UnifiedQueryPlan, video_id: str, frame_ids: list[int]) -> str:
+    target_ids = plan.submission_target_ids or plan.ordered_event_ids
+    relevant_units = plan.units_by_id(target_ids) or plan.query_units
     requested_units = [
         {
             "unit_id": unit.unit_id,
             "query": unit.retrieval_query_en,
             "roles": [role.value for role in unit.roles],
         }
-        for unit in plan.query_units
+        for unit in relevant_units
     ]
     return (
         "Verify a candidate video for fine-grained moment retrieval. Use only the supplied "
@@ -144,12 +146,12 @@ class GeminiVideoVerifier:
         hypothesis: VideoHypothesis,
         frames: Sequence[FrameEvidence],
     ) -> VideoVerification:
-        sheets = _contact_sheets(self.registry, frames, sheet_size=12)
+        sheets = _contact_sheets(self.registry, frames, sheet_size=8)
         parts: list[dict[str, Any]] = []
         try:
             for sheet in sheets:
                 buffer = io.BytesIO()
-                sheet.save(buffer, format="JPEG", quality=85)
+                sheet.save(buffer, format="JPEG", quality=65)
                 parts.append(
                     {
                         "inlineData": {
@@ -167,7 +169,7 @@ class GeminiVideoVerifier:
                     )
                 }
             )
-            payload = self.client.generate(parts, estimated_tokens=12000)
+            payload = self.client.generate(parts, estimated_tokens=6000)
         finally:
             for sheet in sheets:
                 sheet.close()
@@ -296,10 +298,13 @@ class VerifierChain:
 
 def get_video_verifier(registry: ArtifactRegistry) -> VerifierChain | None:
     providers: list[VideoVerifier] = []
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    gemini_only = os.environ.get("AIC_GEMINI_ONLY", "0") == "1"
+    if gemini_only and not api_key:
+        raise RuntimeError("GEMINI_API_KEY is required when AIC_GEMINI_ONLY=1")
     if api_key:
         providers.append(GeminiVideoVerifier(registry, GeminiJsonClient(api_key)))
-    if os.environ.get("AIC_ENABLE_QWEN_VQA") == "1":
+    if not gemini_only and os.environ.get("AIC_ENABLE_QWEN_VQA") == "1":
         model_id = os.environ.get("AIC_QWEN_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
         default_worker = "1" if os.name == "nt" else "0"
         if os.environ.get("AIC_TORCH_WORKER", default_worker) != "0":
@@ -327,8 +332,8 @@ def rerank_with_verifier(
             result = verifier.verify(plan=plan, hypothesis=hypothesis, frames=frames)
         except Exception as error:
             warnings.append(
-                f"VLM verification kept retrieval scores for {hypothesis.video_id}: "
-                f"{type(error).__name__}: {error}"
+                f"Optional Gemini VLM unavailable; kept artifact retrieval scores for "
+                f"{hypothesis.video_id}: {type(error).__name__}: {error}"
             )
             continue
         rank_score = {
@@ -345,19 +350,21 @@ def rerank_with_verifier(
                 frame.model_copy(
                     update={
                         "vlm_score": vlm_score,
-                        "final_score": (
+                        "final_score": max(
+                            frame.final_score,
                             config.frame_base_weight * frame.final_score
-                            + config.frame_vlm_weight * vlm_score
+                            + config.frame_vlm_weight * vlm_score,
                         ),
                     }
                 )
             )
         reranked_frames.sort(key=lambda frame: frame.final_score, reverse=True)
         base = hypothesis.base_video_score or hypothesis.video_score
-        video_score = (
+        video_score = max(
+            base,
             config.verified_base_weight * base
             + config.verified_must_weight * result.must_have_score
-            + config.verified_should_weight * result.should_have_score
+            + config.verified_should_weight * result.should_have_score,
         )
         matched = result.scene_matches or hypothesis.matched_scenes
         target_ids = plan.submission_target_ids or plan.ordered_event_ids

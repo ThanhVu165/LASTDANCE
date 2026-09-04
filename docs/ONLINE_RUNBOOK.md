@@ -99,9 +99,11 @@ $env:AIC_OCR_SNAPSHOT_DIR = "$env:AIC_DATA\ocr\snapshots\ocr-snapshot-<UTC>-<has
 
 Online chỉ đánh dấu OCR `READY` sau khi verify đủ đúng ba file `ocr.sqlite`, `coverage.json`,
 `SHA256SUMS`, checksum SQLite/sidecar, catalog SHA/count/video/UID-set, FTS5 schema, SQLite
-integrity và join `(video_id, keyframe_uid)`. UI/provenance luôn hiện `snapshot_id`, coverage,
-tier, error/missing và `production_ready=false`; đổi snapshot cần restart Streamlit để xóa
-cache resource. Nếu biến không được đặt, Online chỉ tìm `$AIC_DATA/index/ocr.sqlite`.
+integrity và join `(video_id, keyframe_uid)`. Registry nhận schema 1/2 legacy và schema 3
+`ocr_v2_batch_union_v1`; schema khác phải `INVALID`, không fallback. Với v3, UI/provenance
+hiện `snapshot_id`, `source_format`, VietOCR/Paddle/unresolved, coverage, error/missing,
+residual và `production_ready=false`. Đổi snapshot cần restart Streamlit để xóa cache
+resource. Nếu biến không được đặt, Online chỉ tìm `$AIC_DATA/index/ocr.sqlite`.
 
 Text query encoder phải khớp model ID và revision đã dùng build từng FAISS. Prefetch khi
 còn internet:
@@ -123,7 +125,10 @@ Các biến tùy chọn:
 ```powershell
 $env:GEMINI_API_KEY = "..."             # không commit
 $env:AIC_GEMINI_MODEL = "gemini-3.5-flash-lite"
-$env:AIC_ENABLE_QWEN_VQA = "1"          # chỉ khi CUDA sẵn sàng
+$env:AIC_GEMINI_ONLY = "1"               # planner, verifier và VQA chỉ dùng Gemini
+$env:AIC_GEMINI_PLANNER_TIMEOUT_SECONDS = "0"  # 0 = không read-timeout
+$env:AIC_GEMINI_REQUEST_TIMEOUT_SECONDS = "0"  # VLM/VQA chờ Gemini hoàn tất
+$env:AIC_ENABLE_QWEN_VQA = "1"            # không fallback Qwen trong profile thi
 $env:AIC_QWEN_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 $env:AIC_QWEN_REVISION = "89644892e4d85e24eaac8bacfd4f463576704203"
 $env:AIC_TORCH_WORKER = "1"              # default Windows; không tắt với pip FAISS/Torch
@@ -133,11 +138,16 @@ $env:AIC_QWEN_VQA_MAX_NEW_TOKENS = "64"
 $env:AIC_GEMINI_SAFE_RPM = "14"
 $env:AIC_GEMINI_SAFE_TPM = "225000"
 $env:AIC_GEMINI_SAFE_RPD = "450"
-$env:AIC_GEMINI_PLANNER_TIMEOUT_SECONDS = "45"
+# Gemini-only latency profile: không read-timeout; quota session deadline 3600s; VLM tối đa 1 video × 8 frame.
 ```
 
 Gemini key chỉ được đọc từ environment và gửi bằng header `x-goog-api-key`; không đặt key
-trong URL, file `.env`, command history hoặc artifact/provenance.
+trong URL, file `.env`, command history hoặc artifact/provenance. Nếu process chưa có key, nhập vào ô
+password ở sidebar; key chỉ sống trong Streamlit session/process. Với
+`AIC_GEMINI_ONLY=1` không chuyển sang Qwen/rule. HTTP 429/500/502/503/504 và lỗi transport
+tạm thời được retry tối đa 6 lần bằng `Retry-After` hoặc exponential backoff có jitter; mỗi
+attempt vẫn tính quota. Planner chỉ báo lỗi sau khi hết retry. VLM là optional: hết retry thì
+giữ nguyên artifact retrieval score và không gắn VLM verified.
 `gemini-3.5-flash-lite` là default hiện hành. Các model ID khác vẫn được giữ nguyên khi
 operator override để A/B có chủ đích. Adapter tiếp tục dùng `generateContent` vì model hiện
 hành vẫn hỗ trợ endpoint này; migration sang Interactions API không nằm trên critical path.
@@ -251,7 +261,9 @@ chặn cho tới khi operator xác minh.
 
 Khi dùng OCR snapshot development, phải đặt `AIC_OCR_SNAPSHOT_DIR` trong chính terminal chạy
 `streamlit run` và restart toàn bộ Streamlit sau mỗi lần đổi snapshot; refresh trang không xóa
-`ArtifactRegistry` đã cache. Kiểm tra `torch.cuda.is_available()` trước khi kỳ vọng planner/VQA
+`ArtifactRegistry` đã cache. Máy hiện hành đã đặt user environment tới
+`ocr-snapshot-20260904T131724Z-66ecea73cce1`; theo quyết định người dùng, đây là OCR duy nhất
+được chọn và không cấu hình fallback về snapshot EasyOCR. Kiểm tra `torch.cuda.is_available()` trước khi kỳ vọng planner/VQA
 Qwen hoạt động; chỉ bật `AIC_ALLOW_QWEN_CPU=1` khi chấp nhận độ chậm CPU. Hai lần hỏi VQA được
 coi là đồng thuận khi câu trả lời chuẩn hóa giống nhau hoặc đạt
 `qa_vqa_agreement_similarity` (mặc định 0,6); nếu một câu có chữ số, toàn bộ chuỗi số phải

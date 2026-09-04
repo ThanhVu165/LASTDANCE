@@ -16,6 +16,10 @@ from offline.asr_validation import validate_asr_bundle
 from offline.artifacts import sha256_file
 
 
+MIN_DEVELOPMENT_COVERAGE = 0.90
+MAX_DEVELOPMENT_ERROR_FRACTION = 0.05
+
+
 def publish_asr_index(
     snapshot_dir: Path,
     *,
@@ -30,6 +34,14 @@ def publish_asr_index(
                                   catalog_sha256=sha256_file(catalog_path), frames=catalog)
     if manifest.covered_videos != manifest.catalog_videos and not allow_partial:
         raise RuntimeError("ASR incomplete/error/unverified silence coverage; use --allow-partial for development")
+    is_partial = manifest.covered_videos != manifest.catalog_videos
+    attempted = manifest.success_videos + manifest.silent_videos + manifest.error_videos
+    error_fraction = manifest.error_videos / attempted if attempted else 1.0
+    if allow_partial and is_partial:
+        if manifest.coverage_fraction <= MIN_DEVELOPMENT_COVERAGE:
+            raise RuntimeError("partial ASR coverage must be greater than 90%")
+        if error_fraction >= MAX_DEVELOPMENT_ERROR_FRACTION:
+            raise RuntimeError("partial ASR error fraction must be less than 5%")
     destination = Path(data_root) / "index" / "asr.sqlite"
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(".asr.sqlite.staging")
@@ -43,6 +55,7 @@ def publish_asr_index(
             "schema_version": 1, "action": "publish", "timestamp_utc": datetime.now(UTC).isoformat(),
             "snapshot_id": manifest.snapshot_id, "allow_partial": allow_partial,
             "coverage_fraction": manifest.coverage_fraction, "error_videos": manifest.error_videos,
+            "error_fraction": error_fraction if is_partial else 0.0,
             "missing_videos": manifest.missing_videos,
             "unverified_silent_videos": manifest.unverified_silent_videos,
             "production_ready": False,

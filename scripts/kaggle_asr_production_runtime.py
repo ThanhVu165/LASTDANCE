@@ -175,17 +175,24 @@ def run_production(
                     condition_on_previous_text=False,
                 )
                 rows = []
+                audio_duration = float(getattr(info, "duration", 0.0) or 0.0)
                 for segment in segments:
                     text = str(segment.text).strip()
                     if not text:
                         continue
+                    start_time = max(0.0, float(segment.start))
+                    if audio_duration > 0 and start_time >= audio_duration:
+                        continue
+                    end_time = max(start_time, float(segment.end))
+                    if audio_duration > 0:
+                        end_time = min(end_time, audio_duration)
                     language = "vi" if str(info.language).lower().startswith("vi") else "en"
                     rows.append({
                         "video_id": video_id, "segment_id": f"s{len(rows):06d}",
-                        "start_time": max(0.0, float(segment.start)),
-                        "end_time": max(float(segment.start), float(segment.end)),
+                        "start_time": start_time,
+                        "end_time": end_time,
                         "transcribed_text": text, "language": language,
-                        "keyframe_uid_nearest": _nearest(video_id, float(segment.start), float(segment.end), frames)
+                        "keyframe_uid_nearest": _nearest(video_id, start_time, end_time, frames)
                     })
                 status = "success" if rows else "silent"
                 envelope = {
@@ -193,7 +200,7 @@ def run_production(
                     "status": status, "engine": "whisper_large_v3",
                     "audio_path": f"asr/audio/{batch_id}/{audio.name}",
                     "audio_sha256": _sha256(audio),
-                    "audio_duration_seconds": float(getattr(info, "duration", 0.0) or 0.0),
+                    "audio_duration_seconds": audio_duration,
                     "segments": rows
                 }
             except (OSError, RuntimeError, ValueError) as exc:

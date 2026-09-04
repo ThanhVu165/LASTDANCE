@@ -244,7 +244,7 @@ class GeminiVQAAnswerer(QwenVQAAnswerer):
         sheet, included = QwenVQAAnswerer(self.registry)._contact_sheet(frames)
         try:
             buffer = io.BytesIO()
-            sheet.save(buffer, format="JPEG", quality=88)
+            sheet.save(buffer, format="JPEG", quality=75)
         finally:
             sheet.close()
         prompt = (
@@ -281,12 +281,14 @@ class FallbackVQAAnswerer(VideoAnswerer):
     def answer(self, *, video_id: str, frames: Sequence[FrameEvidence], question: str) -> AnswerResult:
         warnings = []
         best = AnswerResult()
+        provider_successes = 0
         for provider in self.providers:
             try:
                 result = AnswerResult.model_validate(provider.answer(video_id=video_id, frames=frames, question=question))
             except Exception as error:
                 warnings.append(f"Answer provider failed: {error}")
                 continue
+            provider_successes += 1
             warnings.extend(result.warnings)
             if not result.answer.strip():
                 continue
@@ -294,6 +296,8 @@ class FallbackVQAAnswerer(VideoAnswerer):
                 best = result
             if not result.requires_review and result.confidence >= self.accept_confidence:
                 return result.model_copy(update={"warnings": warnings})
+        if not provider_successes and os.environ.get("AIC_GEMINI_ONLY", "0") == "1":
+            raise RuntimeError("Gemini VQA failed: " + "; ".join(warnings))
         return best.model_copy(update={"requires_review": True, "warnings": warnings})
 
 
@@ -303,7 +307,10 @@ def get_video_answerer(
 ) -> VideoAnswerer:
     agreement_similarity = config.qa_vqa_agreement_similarity if config is not None else 0.6
     providers: list[VideoAnswerer] = []
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    gemini_only = os.environ.get("AIC_GEMINI_ONLY", "0") == "1"
+    if gemini_only and not api_key:
+        raise RuntimeError("GEMINI_API_KEY is required when AIC_GEMINI_ONLY=1")
     if api_key:
         providers.append(
             GeminiVQAAnswerer(
@@ -312,7 +319,7 @@ def get_video_answerer(
                 agreement_similarity=agreement_similarity,
             )
         )
-    if os.environ.get("AIC_ENABLE_QWEN_VQA") == "1":
+    if not gemini_only and os.environ.get("AIC_ENABLE_QWEN_VQA") == "1":
         model_id = os.environ.get("AIC_QWEN_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
         default_worker = "1" if os.name == "nt" else "0"
         if os.environ.get("AIC_TORCH_WORKER", default_worker) != "0":

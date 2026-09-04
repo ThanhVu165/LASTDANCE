@@ -226,48 +226,43 @@ Notebook config (mỗi account):
 
 ## 5. Download & Build Snapshot (Local)
 
-### 5.1 Pull All ASR Artifacts from HF
+### 5.1 Pull Result Artifacts from HF at a Pinned Revision
+
+Không tải `asr/audio/` khi chỉ build index. Pin revision để checkpoint đang chạy không đổi
+giữa lúc download:
 
 ```powershell
-python -c "
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id='MinhThuw0103/lastdance-visual-embeddings',
-    repo_type='dataset',
-    allow_patterns='asr/*',
-    local_dir='$env:AIC_DATA/hf-cache',
-    token=<HF_TOKEN>,
-    force_download=False
-)
-"
+$revision = "da510543ff05d2e5d44253527bf3b20d4ad5741d"
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Vu165/lastdance-asr', repo_type='dataset', revision='$revision', allow_patterns=['asr/archives/*/asr-envelope.jsonl','asr/archives/*/manifest.json','asr/checkpoints/batch-01/asr-envelope.jsonl','asr/checkpoints/batch-01/batch-checkpoint.json'], local_dir='$env:AIC_DATA/asr/hf-staging')"
 ```
 
-Output: `AIC_DATA/hf-cache/asr/audio/`, `asr/archives/batch-XX/`, `asr/snapshots/`
-(nếu có snapshot đã tồn tại từ run trước).
+### 5.2 Materialize a Validated Handoff Union
 
-### 5.2 Build Immutable Snapshot
+Completed archive và partial checkpoint không được đưa thẳng vào builder vì batch có thể
+overlap. Lệnh sau kiểm manifest/hash/catalog, checkpoint JSONL/state, chỉ dedupe kết quả
+tương đương, quarantine conflict, chuẩn hóa timestamp ngoài duration và ghi audit:
+
+```powershell
+$archiveArgs = 2..9 | ForEach-Object { @('--archive-dir', ("$env:AIC_DATA/asr/hf-staging/asr/archives/batch-{0:d2}" -f $_)) }
+$handoffArgs = @('-m','scripts.materialize_asr_handoff') + $archiveArgs + @(
+  '--checkpoint-jsonl', "$env:AIC_DATA/asr/hf-staging/asr/checkpoints/batch-01/asr-envelope.jsonl",
+  '--checkpoint-state', "$env:AIC_DATA/asr/hf-staging/asr/checkpoints/batch-01/batch-checkpoint.json",
+  '--catalog', "$env:AIC_DATA/index/catalog/frames.csv",
+  '--inventory', "$env:AIC_DATA/index/inventory.json",
+  '--source-revision', $revision,
+  '--output-jsonl', "$env:AIC_DATA/asr/handoff/asr-union.jsonl",
+  '--output-audit', "$env:AIC_DATA/asr/handoff/asr-union.audit.json")
+python @handoffArgs
+```
+
+### 5.3 Build Immutable Snapshot
 
 ```powershell
 python -m scripts.build_asr_snapshot `
-  --catalog "$env:AIC_DATA\index\frames.csv" `
-  --source-jsonl "$env:AIC_DATA\hf-cache\asr\archives\batch-01\asr-envelope.jsonl" `
-  --source-jsonl "$env:AIC_DATA\hf-cache\asr\archives\batch-02\asr-envelope.jsonl" `
-  --source-jsonl "$env:AIC_DATA\hf-cache\asr\archives\batch-03\asr-envelope.jsonl" `
-  ... `
+  --catalog "$env:AIC_DATA\index\catalogrames.csv" `
+  --source-jsonl "$env:AIC_DATAsr\handoffsr-union.jsonl" `
   --source-format "asr_envelope_v1" `
-  --output-root "$env:AIC_DATA\asr\snapshots"
-```
-
-Hoặc script automation qua glob:
-
-```powershell
-python -c "
-import json
-from pathlib import Path
-jsonl_files = sorted(Path('$env:AIC_DATA/hf-cache/asr/archives').glob('batch-*/asr-envelope.jsonl'))
-args = ' '.join([f'--source-jsonl {f}' for f in jsonl_files])
-# ... build_asr_snapshot với args đó
-"
+  --output-root "$env:AIC_DATAsr\snapshots"
 ```
 
 **Output:**
