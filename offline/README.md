@@ -181,6 +181,51 @@ bằng chứng SHA-256 và notebook production 9 batch nằm trong Visual runboo
 riêng; snapshot handoff cuối là commit `938aefd437ab8db61fc6599d613aedcf4921d71e`.
 BEiT-3 đã bị loại vĩnh viễn, không mở lại audit/checkpoint/adapter.
 
+## OCR v2 — recognition 9/9 và snapshot development local đã validate
+
+Nhận kết quả và tích hợp Nhánh 2: [OCR_V2_ONLINE_HANDOFF.md](../docs/OCR_V2_ONLINE_HANDOFF.md).
+Ground truth được hoãn theo quyết định người dùng để bàn giao development; không phải accuracy PASS.
+
+Nguồn chuẩn duy nhất: [BASELINE_SPEC.md](../docs/BASELINE_SPEC.md) §2.2, cập nhật 04/09/2026.
+Pipeline: CRAFT bbox cache từ 9 archive HF → VietOCR mọi crop gốc → Paddle có điều kiện
+→ residual tùy chọn Gemini → JSONL → union/SQLite local. Không chạy lại EasyOCR/Vintern;
+không bật làm nét. Bốn T4 có log 30 giây, checkpoint local từng minibatch + HF verified
+theo spec; không dùng máy Codex chạy model. Theo dõi checklist trong
+[OCR_V2_PRODUCTION_PLAN.md](../docs/OCR_V2_PRODUCTION_PLAN.md).
+
+Planner/canary/recognition: `notebooks/kaggle_ocr_v2_production.ipynb`, hướng dẫn tại
+[OCR_V2_PRODUCTION_RUNBOOK.md](../docs/OCR_V2_PRODUCTION_RUNBOOK.md). Bốn worker đã chạy
+xong chín batch T4/HF thật; output recognition vẫn không phải terminal envelope/SQLite final.
+Planner và worker đọc `frames.csv`/state từ dataset Kaggle qua `CATALOG_PATH` (hoặc tự tìm
+dưới `INPUT_ROOT`); HF chỉ cung cấp archive OCR và lưu kết quả, không cần upload catalog.
+Cell cuối có log từng bước, heartbeat 20 giây và stream stdout/stderr; có thể copy từ
+`scripts/kaggle_ocr_v2_production_launch.py` để cập nhật notebook đang dùng theo runbook.
+
+Migration/union dùng `offline/ocr_v2_snapshot.py`, pin source bằng
+`scripts/sync_ocr_v2_results.py`, build/validate bằng `scripts/build_ocr_v2_snapshot.py` và
+`scripts/validate_ocr_v2_snapshot.py`; xem
+[OCR_V2_SNAPSHOT_RUNBOOK.md](../docs/OCR_V2_SNAPSHOT_RUNBOOK.md). Schema coverage v3 giữ
+engine VietOCR/Paddle thật và tương thích song song với reader snapshot legacy. Artifact
+thật `ocr-snapshot-20260904T081629Z-66ecea73cce1` đã qua validator độc lập với
+293.336/293.336 UID và 269.259 FTS row; chưa sửa Online hoặc đổi snapshot đang phục vụ.
+
+### Notebook thử nghiệm và evidence (không phải runner production)
+
+Khi cần đánh giá lỗi EasyOCR Batch 01 trước khi dùng thêm GPU, đọc
+`docs/OCR_V2_EXPERIMENT_RUNBOOK.md`. Quy trình tạo bundle cân bằng 100 frame/120 crop từ JPEG
+và archive có checksum bằng `notebooks/kaggle_ocr_v2_review.ipynb`, chấm Gate A bằng nhãn
+tay, rồi dùng
+`notebooks/kaggle_ocr_v2_gate_b.ipynb` để so cached EasyOCR với PaddleOCR/VietOCR trên một T4.
+Notebook không gọi Vintern/Gemini, không build SQLite và không được đánh dấu artifact
+production ready. Người dùng đã chọn triển khai v2 theo deadline và evidence visual/runtime;
+không được diễn giải quyết định này thành Gate A/B PASS định lượng.
+
+Thử nghiệm làm nét bổ sung: đọc `docs/OCR_V2_SHARPEN_TRIAL_RUNBOOK.md`, dùng
+`notebooks/kaggle_ocr_v2_sharpen.ipynb` trên session T4 đã có VietOCR. So 30 crop × 3
+phương án, có log/checkpoint và sheet full text. Trial đã xong 90/90; review không xác nhận
+đủ ba crop cải thiện rõ nên giữ gốc, không cần chạy lại trước production. Các notebook
+Gate A/B/sharpen chỉ tái lập evidence, không thực hiện chạy đủ chín batch.
+
 ## Build FAISS local
 
 Sau khi một embedding modality đã hoàn tất và được tải về, đọc

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "ocr_v2_production_run_ids",
+  "repository": "MinhThuw0103/lastdance-visual-embeddings",
+  "workers": {
+    "1": "a3c8acc7c63bd2039d3dae43302e7d7160cbd95c9a42645a0cc7506809e9af68",
+    "2": "97c9974ef9c1c81ad392a76c68e50cef9ceda2477e4e4d1c712931fd145a4d22",
+    "3": "3f0e3a6c5b3b4100de2f9ccc11f286da781c5719323f193d6a0a3d93a4494659",
+    "4": "e1edc00c157108984e19a51448bc989203f110261b118176d2edf098dcd719a2"
+  }
+}

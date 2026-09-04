@@ -1,0 +1,4 @@
+# Local Python 3.11: download, union and validate existing OCR v2 outputs only.
+# No OCR models, Torch, CUDA, JPEG processing or FAISS in this profile.
+pydantic==2.10.3
+huggingface-hub==1.28.0

@@ -21,8 +21,14 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
    chạy CLIP/SigLIP độc lập trên Kaggle và test checkpoint/resume thật.
 9. [`docs/FAISS_INDEX_RUNBOOK.md`](docs/FAISS_INDEX_RUNBOOK.md) - build/add/validate từng
    `IndexIDMap` độc lập trên CPU local sau khi embedding batch hoàn tất.
-10. [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md) - OCR phân tầng CRAFT → EasyOCR → Vintern
-    → Gemini residual, snapshot SQLite development, JSONL resume và đồng bộ HF Dataset.
+10. [`docs/OCR_V2_PRODUCTION_PLAN.md`](docs/OCR_V2_PRODUCTION_PLAN.md) - checklist OCR v2 đã
+    chốt: CRAFT cache → VietOCR → Paddle có điều kiện; bốn T4, log và checkpoint HF.
+11. [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md) - đầu mối vận hành OCR, phân biệt pipeline
+    v2 hiện hành với lệnh EasyOCR/Vintern lịch sử. Contract chỉ nằm trong baseline §2.2.
+12. [`docs/OCR_V2_SNAPSHOT_RUNBOOK.md`](docs/OCR_V2_SNAPSHOT_RUNBOOK.md) - tải đúng chín
+    result production, union/validate và atomic-build SQLite development trên CPU local.
+13. [`docs/OCR_V2_ONLINE_HANDOFF.md`](docs/OCR_V2_ONLINE_HANDOFF.md) - **nhóm Online đọc trước**:
+    nhận code/dữ liệu, revision/checksum, setup CPU, adapter schema v3 và rollback.
 
 ASR contract nằm trực tiếp trong `BASELINE_SPEC.md` §2A. Không duy trì spec/kiến trúc
 archived song song; lịch sử quyết định nằm trong Git và Changelog của baseline.
@@ -76,12 +82,20 @@ trong lúc xử lý video. Batch runner có checkpoint/resume riêng theo từng
 trạng thái sau khi manifest đã atomic-publish rồi validate lại. CLIP/SigLIP/EVA-CLIP đã
 hoàn tất 9/9 batch; local FAISS đã validate đủ 293.336 UID/873 video.
 
-OCR offline có contract CRAFT → EasyOCR mọi region → Vintern chỉ cho router v2 candidate,
-với confidence Vintern calibrate từ ground-truth trước khi được quyền override EasyOCR.
-Snapshot SQLite development được version/checksum và đồng bộ qua private HF Dataset bằng
-`scripts.publish_ocr_snapshot_hf`; xem [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md). Không
-commit snapshot/JSONL vào Git và không coi snapshot development là production-ready. Online
-đã tích hợp snapshot EasyOCR bằng `AIC_OCR_SNAPSHOT_DIR`; ASR hiện còn thiếu.
+OCR v2 đã chốt 04/09/2026 theo [`BASELINE_SPEC.md §2.2`](docs/BASELINE_SPEC.md): tái sử dụng
+CRAFT bbox từ chín archive HF → VietOCR mọi crop gốc → Paddle có điều kiện → residual
+Gemini tùy chọn, cần duyệt riêng. Không chạy lại EasyOCR/Vintern, không bật làm nét sau
+trial 30 crop. Bốn worker đã hoàn tất chín batch trên T4 và upload result/report
+content-addressed lên HF. Migration/validator/build SQLite v2 đã materialize và validate
+snapshot development thật `ocr-snapshot-20260904T081629Z-66ecea73cce1`, phủ đủ
+293.336 UID với 269.259 FTS row; vẫn giữ `complete=false`, `production_ready=false`. Xem
+[hướng dẫn recognition](docs/OCR_V2_PRODUCTION_RUNBOOK.md) và
+[hướng dẫn snapshot](docs/OCR_V2_SNAPSHOT_RUNBOOK.md).
+Gate B có kết quả thử nghiệm, không phải PASS định lượng hay production-ready.
+Online vẫn dùng snapshot EasyOCR development qua `AIC_OCR_SNAPSHOT_DIR`; chưa đổi artifact
+đang phục vụ. Snapshot bất biến, có coverage/checksum; không commit snapshot/JSONL vào Git.
+Xem [plan triển khai](docs/OCR_V2_PRODUCTION_PLAN.md) và [runbook](docs/OCR_RUNBOOK.md).
+ASR hiện còn thiếu.
 
 ## Invariant quan trọng
 
