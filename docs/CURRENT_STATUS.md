@@ -10,7 +10,8 @@ Chi tiết đợt sửa và phần chưa xác minh: [QUALIFIER_ACCEPTANCE_RUNBOO
 **Mức hiện tại: integration-ready cho KIS/QA/TRAKE và submission vòng sơ tuyển; chưa được
 phép gọi là accuracy-complete.** Offline visual đã đóng/PASS. Online Accuracy-Max và official
 export đã implement và bổ sung VerifiedFrameRef cho frame gốc ngoài catalog. QA gắn evidence,
-TRAKE giữ frame cùng shot. OCR giữ nguyên, tạm bỏ qua vì sắp thay artifact theo người dùng.
+TRAKE giữ frame cùng shot. Code OCR v2 đã merge từ `97da0bd`; snapshot/index Online vẫn
+giữ bản hiện tại, adapter schema v3 và activation chưa thực hiện.
 ASR đang chạy Kaggle; chưa tải artifact và chưa tích hợp thật. Bộ
 kiểm tra thủ công/ground-truth cần chạy lại để chốt Recall/accuracy sau thay đổi Online/OCR.
 
@@ -22,6 +23,7 @@ kiểm tra thủ công/ground-truth cần chạy lại để chốt Recall/accur
 | SigLIP FAISS | `READY` | `IndexIDMap(IndexFlatIP)`, dim 768, 293.336 UID |
 | EVA-CLIP FAISS | `READY` | `IndexIDMap(IndexFlatIP)`, dim 768, 293.336 UID |
 | OCR | `READY-DEVELOPMENT` | coverage 100% UID; 278.091 FTS row; 57 error; chưa final |
+| OCR v2 | `SNAPSHOT-VALIDATED-DEVELOPMENT` | 9/9 batch HF; local coverage 293.336/293.336 UID, 269.259 FTS row, 8.889 error; chưa chuyển Online/final |
 | ASR | `WAITING_KAGGLE` | người dùng xác nhận đang chạy; chờ hoàn tất mới tải HF |
 | Online core/UI | `IMPLEMENTED` | Streamlit trực tiếp `OnlineEngine`, health 200 |
 | Submission official | `IMPLEMENTED` | CSV/ZIP fail-closed theo AIC26 qualifier |
@@ -52,6 +54,62 @@ runtime catalog + ba FAISS/state + OCR snapshot khoảng 2,31 GiB. Data retentio
 
 ## OCR hiện hành
 
+### Recognition v2 đã xong, chưa thay artifact Online
+
+Entry point nhóm nhận: [OCR_V2_ONLINE_HANDOFF.md](OCR_V2_ONLINE_HANDOFF.md).
+Người dùng hoãn chấm ground truth của audit OCR v2 để bàn giao development kịp thi;
+không tuyên bố quality PASS. Git chỉ có code/hướng dẫn; SQLite hiện local, raw results ở HF.
+
+Theo [BASELINE_SPEC.md](BASELINE_SPEC.md) §2.2 bản 28: CRAFT bbox cache từ chín archive
+EasyOCR HF → VietOCR mọi crop gốc → Paddle có điều kiện → Gemini residual tùy chọn sau
+duyệt riêng. Bốn T4, batch khởi đầu 64/128, log tối đa 30 giây, checkpoint local từng
+minibatch + HF verified theo spec. Không rerun EasyOCR/Vintern, không bật làm nét.
+
+Gate B đã có artifact thực tế, chưa có ground truth đủ để kết luận PASS recall/CER.
+Trial làm nét hoàn tất 90/90; original khớp Gate B 30/30, 10 đối chứng không đổi;
+review không xác nhận đủ ba crop cải thiện rõ. Chốt giữ gốc, không chạy lại trial.
+SHA/signature và limitation được ghi ở baseline §2.2a; không sửa report ZIP bất biến.
+
+Planner đã chia đúng chín batch cho bốn worker. Log/report người dùng cung cấp xác nhận mỗi
+worker kết thúc `[DONE]`, từng batch có `recognition_complete=true` và result/report được
+`HF_VERIFIED`; batch chạy lại đã restore prediction đúng signature thay vì nhận dạng lại.
+Các cờ `complete=false`, `production_ready=false` là đúng vì đây mới là recognition shard.
+
+Migration đã được tách khỏi legacy bằng coverage schema v3: pin source theo revision/hash,
+validate raw prediction/selection/residual, kiểm chín UID shard disjoint/exhaustive rồi
+atomic-build đúng năm cột FTS. Test tổng hợp 9 batch đã PASS. Ngày 04/09/2026, dữ liệu thật
+đã sync tại HF revision `8ca4271dd0218d3f3f3967a4d8a5c6aeebeaddc5`; các export resume
+batch 03/07/09 được chứng minh tương đương theo member hash rồi chọn bản mới nhất.
+
+Snapshot OCR v2 local đã qua validator độc lập:
+
+```text
+ocr-snapshot-20260904T081629Z-66ecea73cce1
+coverage=293336/293336 UID (100%)
+fts_rows=269259
+success=269259
+no_text=15188
+error=8889
+residual_frames=240976
+residual_regions=763395
+sqlite_sha256=9b80eed3ef376655b6a4ad6c9496072f2cf215dec38f5af9e5095ebb491ed78e
+complete=false
+production_ready=false
+```
+
+Preflight consumer chỉ đọc đã xác nhận `online.fts.FtsSearcher` truy vấn trực tiếp SQLite
+thành công với các probe `giá dầu mazut`, `Việt Nam`, `Hà Nội` và `2026`. Handoff chưa được
+bật: `online.artifacts.ArtifactRegistry` hiện parse `coverage.json` bằng manifest EasyOCR
+schema 1/2 nên từ chối OCR v2 schema 3/`ocr_v2_batch_union_v1`. Đây là thay đổi Nhánh 2 cần
+được yêu cầu riêng; không đổi `AIC_OCR_SNAPSHOT_DIR` trước khi có adapter + regression test.
+
+Xem
+[runbook recognition](OCR_V2_PRODUCTION_RUNBOOK.md) và
+[runbook snapshot](OCR_V2_SNAPSHOT_RUNBOOK.md). Chưa thay snapshot hay consumer Online;
+không gọi model/GPU/API từ máy Codex.
+
+### Artifact EasyOCR development đang dùng (không đổi)
+
 Nguồn EasyOCR hiện tại là chín archive tại HF revision
 `a5dcff74326f43421553481793d4a1e51eb59ce5`. Archive checksum, manifest, catalog SHA,
 partition 873 video và layer completion gate đã verify trước khi build local.
@@ -73,7 +131,7 @@ production_ready=false
 57 error là frame CRAFT có region nhưng EasyOCR không trả text không-rỗng; không được đổi
 thành `no_text`/success giả. Batch 02 có 47 và batch 03 có 10 error; bảy batch còn lại đạt
 frame-level completion gate. Snapshot vẫn dùng được cho Online visible-text retrieval vì
-SQLite/integrity/UID join hợp lệ, nhưng không thay thế terminal OCR final Vintern/Gemini.
+SQLite/integrity/UID join hợp lệ, nhưng không phải artifact OCR v2 hoặc OCR final.
 
 Online chọn snapshot bằng:
 
@@ -114,9 +172,9 @@ snapshot ID, tier, coverage, error/missing và `production_ready=false`.
 
 ## Validation đã chạy
 
-- Full Online regression **55/55 test PASS**; toàn repo **242/242 test PASS**: role-aware
-  planner, SRRF/fusion, retrieval/CLIP rollback, video/task heads, OCR UID-neighbor answer,
-  VLM partial-output behavior, Torch worker và official CSV/ZIP.
+- Toàn repo **305/305 test PASS** trên Windows Python 3.11.9 trước commit bàn giao OCR v2.
+  Đã sửa fixture Gate A CSV thiếu cột `video_id` và regenerate review notebook để source
+  nhúng khớp runtime. Test không thay thế accuracy/ground-truth hoặc T4 production evidence.
 - Deep preflight PASS: hash/state/structure/full UID diff của ba FAISS và checksum/catalog/
   FTS5/integrity/UID join của OCR snapshot đều hợp lệ.
 - Probe thật `giá dầu mazut` sau prefix token-coverage đưa `L22_V029` lên Top 1 và các bảng
@@ -126,7 +184,10 @@ snapshot ID, tier, coverage, error/missing và `production_ready=false`.
 
 1. Rerun bộ kiểm tra thủ công có ground truth; báo Video Recall@12, Frame/shot Recall@100,
    QA answer/evidence và TRAKE sequence.
-2. Điều tra/sửa 57 OCR error hoặc materialize snapshot tầng cao hơn; giữ snapshot mới bất biến.
+   Accuracy vẫn OPEN; riêng chấm ground truth OCR v2 đã được người dùng hoãn, không chặn
+   bàn giao code/snapshot development ở đợt này.
+2. Review 8.889 error/763.395 residual và chỉ mở Gemini residual sau duyệt chi phí riêng;
+   kiểm consumer Nhánh 2 trước khi chủ động chuyển Online sang snapshot OCR v2.
 3. Build/validate `asr.sqlite` hoặc chấp nhận spoken-text degraded mode có warning.
 4. Freeze config/model revision/quota và tạo official ZIP canary ngay trước vòng thi.
 

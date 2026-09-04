@@ -1,7 +1,41 @@
-# OCR runbook — CRAFT → EasyOCR → Vintern → Gemini residual
+# OCR runbook — đầu mối OCR v2 và vận hành artifact lịch sử
 
-Nguồn chuẩn kỹ thuật là `docs/BASELINE_SPEC.md` §2.1d/§2.2. Runbook này chỉ mô tả cách
-vận hành Gate 1–production; không thay schema `OcrResult` hoặc `ocr_fts`.
+**Cập nhật 04/09/2026:** nguồn chuẩn duy nhất là [BASELINE_SPEC.md](BASELINE_SPEC.md)
+§2.1d/§2.2. Pipeline đã chốt là **CRAFT bbox cache → VietOCR → Paddle có điều kiện**,
+Gemini residual tùy chọn sau duyệt riêng. Không chạy lại EasyOCR/Vintern, không bật làm nét.
+
+## Đọc/chạy gì ở trạng thái hiện tại
+
+- [OCR_V2_ONLINE_HANDOFF.md](OCR_V2_ONLINE_HANDOFF.md): entry point cho nhóm Online,
+  nhận code, tải kết quả/catalog/plan, validate snapshot và adapter schema v3 cần làm.
+- [OCR_V2_PRODUCTION_PLAN.md](OCR_V2_PRODUCTION_PLAN.md): checklist triển khai bốn T4,
+  input chín archive HF, log tiến độ và checkpoint bền vững theo baseline.
+- [OCR_V2_PRODUCTION_RUNBOOK.md](OCR_V2_PRODUCTION_RUNBOOK.md): notebook planner/canary/
+  recognition đã hoàn tất chín batch trên bốn T4/HF thật; dùng để truy vết/restart worker,
+  không cần chạy lại khi result/report content-addressed còn hợp lệ.
+- [OCR_V2_SNAPSHOT_RUNBOOK.md](OCR_V2_SNAPSHOT_RUNBOOK.md): đăng nhập HF local, sync đúng
+  chín source, union/validate và atomic-build SQLite development schema v3. Không dùng
+  notebook EasyOCR/Vintern hoặc builder legacy bên dưới cho artifact v2 mới.
+- [OCR_V2_EXPERIMENT_RUNBOOK.md](OCR_V2_EXPERIMENT_RUNBOOK.md): tái lập Gate A/B đã có
+  evidence runtime/visual, chưa có PASS định lượng. Không bắt người dùng chấm lại để ghi
+  nhận quyết định triển khai theo deadline; không sửa ngưỡng gate cho khớp kết quả.
+- [OCR_V2_SHARPEN_TRIAL_RUNBOOK.md](OCR_V2_SHARPEN_TRIAL_RUNBOOK.md): trial đã xong 90/90,
+  review không đạt ngưỡng cải thiện; giữ crop gốc. Không cần chạy lại trial trước production.
+- Snapshot đang phục vụ vẫn là EasyOCR development, xem [CURRENT_STATUS.md](CURRENT_STATUS.md).
+  Những lệnh đọc/validate/build artifact cũ bên dưới chỉ dùng cho định dạng cũ. Không đổi
+  snapshot Online hoặc gọi API chỉ vì đọc runbook.
+
+## Hướng dẫn legacy — chỉ đọc/tái lập artifact cũ
+
+**Toàn bộ phần trong khối dưới là quy trình trước OCR v2, không phải kế hoạch production
+hiện hành.** Giữ lệnh và evidence để truy vết archive/snapshot cũ, không giữ một spec khác.
+Các cách gọi “pipeline mới”, “đã chốt”, “production” trong khối này nói về thời điểm lịch sử.
+Quyết định mới luôn theo baseline §2.2; không khởi chạy lại các worker/model/API legacy.
+
+<details>
+<summary>Tham khảo vận hành CRAFT → EasyOCR → Vintern → Gemini trước ngày chốt OCR v2</summary>
+
+Các mục tiếp theo là nội dung runbook lịch sử.
 
 ## Môi trường và luồng artifact đã chốt
 
@@ -593,3 +627,5 @@ Mỗi lần đổi `snapshot_id` phải restart Streamlit. Registry fail closed 
 `catalog_sha256`, UID-set, FTS schema/count hoặc join video/UID sai; snapshot EasyOCR dù phủ
 đủ UID vẫn phải hiện `online_development_only`, tier/error count và
 `production_ready=false` cho đến terminal union cuối.
+
+</details>

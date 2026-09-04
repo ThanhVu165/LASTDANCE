@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "detector_sample_frames": 100,
+  "detector_video_ids": [
+    "L21_V001",
+    "L21_V002",
+    "L21_V003",
+    "L21_V005",
+    "L21_V006"
+  ],
+  "recognizer_sample_regions": 120,
+  "recognizer_min_usable_regions": 100,
+  "numeric_name_min_regions": 5,
+  "detector_failure_trigger": 0.2,
+  "token_recall_min_absolute_gain": 0.05,
+  "cer_min_relative_reduction": 0.1,
+  "numeric_name_max_absolute_regression": 0.02,
+  "token_recall_tie_margin": 0.02,
+  "throughput_canary_regions": 5000,
+  "catalog_archive_count": 9,
+  "production_workers": 4,
+  "production_max_hours": 18.0,
+  "model_ids": [
+    "easyocr_latin_g2_cached",
+    "latin_PP-OCRv5_mobile_rec",
+    "vietocr_vgg_seq2seq"
+  ]
+}

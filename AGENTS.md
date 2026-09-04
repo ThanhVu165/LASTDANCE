@@ -21,7 +21,9 @@
 - **Máy tham chiếu local/Shot:** Intel i5-12450H, RTX 4050 Laptop **6 GiB VRAM**,
   Python 3.11 trên Windows/Colab. **Visual Embedding Kaggle GPU dùng Python 3.12.x** theo
   image Kaggle đã validate; không áp Python 3.12 ngược sang profile local/Shot.
-- **Thời gian còn lại:** tính từ 23/08/2026, hạn 6 ngày cho toàn bộ pipeline offline + online.
+- **Mốc lịch sử:** từ 23/08/2026 từng đặt hạn 6 ngày cho toàn pipeline; không xem đây là
+  đồng hồ còn lại. Ngân sách OCR người dùng đặt khi chốt v2 là khoảng 10 tiếng gồm chuẩn bị,
+  không tự reset sau mỗi lần sửa; xem `docs/BASELINE_SPEC.md` §2.2b.
 
 ---
 
@@ -48,8 +50,8 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
 
 ### Việc thuộc phạm vi:
 - `offline/` — TransNetV2 shot detection, keyframe extraction, dedup/lọc nhiễu, visual
-  embedding (CLIP/SigLIP/EVA-CLIP), OCR (CRAFT gate + Gemini recognition + EasyOCR
-  recognizer fallback), build FAISS + SQLite FTS5.
+  embedding (CLIP/SigLIP/EVA-CLIP), OCR v2 (CRAFT bbox cache → VietOCR → Paddle có điều kiện;
+  Gemini residual tùy chọn sau duyệt riêng), build FAISS + SQLite FTS5.
 - `shared/schemas/` — Pydantic schema dùng chung (`FrameRecord`, `OcrResult`, `AsrSegment`)
   — sửa ở đây ảnh hưởng cả 2 nhánh, cần cẩn trọng và thông báo khi đổi.
 - `scripts/` — script chạy batch trên Kaggle, tách nhỏ danh sách video song song.
@@ -87,9 +89,9 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
   cùng commit/config và toàn bộ 5 video dev-subset đã qua parity 100% từng shot/range với
   manifest CPU. CUDA phải được chọn tường minh, ghi provenance và fail closed; tuyệt đối
   không fallback âm thầm về CPU.
-- **Embedding (CLIP/SigLIP/EVA-CLIP)** → chạy Kaggle GPU theo batch. **OCR Tầng 1–3
-  (CRAFT + EasyOCR + Vintern FP16 official)** cũng chỉ chạy Kaggle GPU, được phép chia chín
-  batch UID-disjoint trên tối đa bốn tài khoản OCR. Máy chạy Codex không GPU chỉ viết code,
+- **Embedding (CLIP/SigLIP/EVA-CLIP)** → chạy Kaggle GPU theo batch. **OCR v2
+  (VietOCR + Paddle có điều kiện, tái sử dụng CRAFT bbox cache)** chỉ chạy Kaggle GPU,
+  chia chín batch UID-disjoint trên bốn tài khoản OCR, một T4/worker. Máy Codex chỉ viết code,
   orchestration và validate artifact; RTX 4050 máy thi chỉ chạy Online và đọc
   `ocr.sqlite` đã build sẵn, không chạy model OCR lúc thi. Nhánh OCR và Nhánh 3 (ASR) không
   dùng chung tài khoản/quota.
@@ -100,6 +102,8 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
   Bắt buộc:
   - Vector đã ép `float16` trước khi push.
   - **Không push từng video một** — gom batch (50–100 video/lần hoặc cuối mỗi phiên Kaggle).
+    Ngoại lệ checkpoint OCR v2: sync HF giữa batch theo §2.2b, tối đa 5 phút giữa mốc kiểm
+    tra minibatch; đây không phải publish final từng video. Log/heartbeat tối đa 30 giây.
   - Chỉ `snapshot_download()` full repo về local 1 lần trước khi thi, không pull lại giữa
     chừng trừ khi có patch khẩn.
   - Đặt tên revision/commit theo batch (`batch-01`, `batch-02`...) để rollback không phải
@@ -132,15 +136,19 @@ Nhánh 2 (`online/`) do người khác phụ trách — **không tự ý sửa c
   production ưu tiên Windows NVIDIA GPU sau parity 5/5. Mỗi worker phải dùng checkpoint
   signature-aware và chỉ đánh dấu xong video sau khi manifest schema v2 đã atomic-publish và
   validate lại thành công.
-- **OCR full 873 video có thể không kịp 6 ngày** — phải chia UID disjoint và resume theo
-  JSONL. Pipeline chạy CRAFT → EasyOCR mọi region → Vintern FP16 official cho router v2 khi
-  archive Vintern sẵn có → calibrated override chỉ khi empirical bucket confidence lớn hơn
-  EasyOCR gốc → Gemini residual/arbiter. Theo quyết định 28/08, Vintern không còn là barrier:
-  batch thiếu Vintern chuyển toàn bộ router-v2 candidate thẳng sang Gemini với provenance
-  `vintern_not_available`; paid vẫn chỉ chốt sau exact region/frame/shot còn lại. Embedding
-  chỉ ưu tiên lịch và chỉ cho phép same-shot reuse
-  khi đồng thời pass embedding cosine + CRAFT layout + crop SSIM + crop pHash; không được
-  gate `no_text` bằng embedding.
+- **OCR v2 chốt 04/09/2026:** CRAFT bbox cache từ chín archive EasyOCR trên HF `ocr/archives`
+  → VietOCR mọi crop → Paddle có điều kiện → Gemini residual tùy chọn sau duyệt riêng.
+  Đọc `docs/BASELINE_SPEC.md` §2.2 và checklist `docs/OCR_V2_PRODUCTION_PLAN.md` trước khi
+  triển khai. Không chạy lại EasyOCR/Vintern, không bật làm nét sau trial 30 crop, không
+  so confidence chéo model. Gate B chỉ có evidence runtime/visual, không giả PASS định lượng.
+  Bốn worker chia nguyên batch bằng số region thật, cùng input revision, checkpoint local
+  từng minibatch + HF verified, namespace riêng, fail closed khi sync lỗi. Recognition worker
+  đã hoàn tất 9/9 batch T4/HF thật; snapshot schema v3 local đã validate, adapter Online
+  còn thiếu. Người dùng hoãn ground truth để bàn giao development, không giả quality PASS;
+  xem `docs/OCR_V2_ONLINE_HANDOFF.md`. Không gán
+  output mới thành engine/tier cũ. Giữ snapshot EasyOCR đang phục vụ Online cho tới khi
+  handoff tương thích đã validate. Same-shot reuse vẫn cần đồng thời pass embedding cosine,
+  CRAFT layout, crop SSIM và crop pHash; embedding không gate `no_text`.
 - **BEiT-3 đã bị loại vĩnh viễn khỏi kiến trúc.** Không mở lại audit/checksum/conversion
   Microsoft UniLM; modality thứ ba chính thức là EVA-CLIP với checkpoint safetensors đã pin.
 - **Thể lệ AIC 2026 có internet trong phòng thi hay không — CHƯA XÁC NHẬN.** Ảnh hưởng trực

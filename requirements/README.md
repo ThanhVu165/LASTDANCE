@@ -6,12 +6,24 @@ Local/Shot target runtime is CPython 3.11.9. Kaggle Visual target runtime is CPy
 | File | Purpose | Machine |
 |---|---|---|
 | `dev.txt` | schema/unit tests, no model | any CPU machine |
+| `ocr-v2-artifacts.txt` | sync/build/validate OCR v2 đã nhận dạng; không model/CUDA | local CPU Python 3.11 |
 | `offline-local.txt` | inventory, TransNetV2 CPU, filtering, FAISS build, HF artifact sync | local Windows/Linux |
-| `ocr-api.txt` | Gemini residual audit/canary only; không dùng trước quyết định Tầng 4 | orchestration CPU hoặc Kaggle |
-| `ocr-kaggle-gpu.txt` | CRAFT + EasyOCR Tầng 1–2; Vintern FP16 pin riêng trong policy | Kaggle GPU OCR |
+| `ocr-api.txt` | Công cụ Gemini legacy; OCR v2 vẫn cần residual count/cost và duyệt canary riêng | orchestration CPU hoặc Kaggle |
+| `ocr-kaggle-gpu.txt` | Profile CRAFT + EasyOCR legacy, không phải setup VietOCR/Paddle production v2 | Kaggle GPU OCR legacy |
 | `shot-windows-gpu.txt` | TransNetV2 CUDA 12.6, Torch 2.12.1 | Windows NVIDIA GPU |
 | `shot-colab-gpu.txt` | TransNetV2 CUDA shot detection, giữ Torch có sẵn | Google Colab T4 |
 | `kaggle-gpu.txt` | CLIP/SigLIP/EVA-CLIP batch embedding | Kaggle GPU |
+
+OCR v2 theo [BASELINE_SPEC.md](../docs/BASELINE_SPEC.md) §2.2, checklist ở
+[OCR_V2_PRODUCTION_PLAN.md](../docs/OCR_V2_PRODUCTION_PLAN.md): VietOCR `vgg_seq2seq` +
+Paddle `latin_PP-OCRv5_mobile_rec`, dùng lại CRAFT bbox cache. Environment trial/Gate B
+đã có notebook riêng. Recognition đã hoàn tất chín batch trên bốn T4/HF; bước sync/union
+SQLite local dùng profile nhẹ `ocr-v2-artifacts` hoặc môi trường `offline-local` đã có, xem
+[production runbook](../docs/OCR_V2_PRODUCTION_RUNBOOK.md) và
+[snapshot runbook](../docs/OCR_V2_SNAPSHOT_RUNBOOK.md). Không cài
+profile EasyOCR cũ rồi coi là môi trường v2, không chạy model OCR trên máy Codex.
+Khi triển khai phải bảo vệ Torch/Torchvision + NVIDIA/NCCL sẵn có và kiểm tra GPU trước
+inference; không tự giải quyết dependency bằng cách cài đè bộ CUDA của Kaggle.
 
 Kaggle visual embedding phải theo `docs/VISUAL_EMBEDDING_RUNBOOK.md`. CLIP/SigLIP/EVA-CLIP
 đều đã qua dev gate và production 9/9 batch; EVA-CLIP dùng `open-clip-torch==3.3.0`,
