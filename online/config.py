@@ -43,12 +43,13 @@ class OnlineConfig:
     vlm_video_top_k: int = 4
     vlm_frame_top_k: int = 36
     vlm_sheet_size: int = 12
-    gemini_max_calls_per_search: int = 8
+    gemini_max_calls_per_search: int = 14
     gemini_search_timeout_seconds: float = 300.0
     trake_frame_top_k: int = 32
     trake_beam_width: int = 8
     trake_decay: float = 0.0
     qa_similarity_threshold: float = 0.85
+    qa_vqa_agreement_similarity: float = 0.6
     qa_answer_video_top_k: int = 3
     portfolio_max_per_video: int = 40
     portfolio_primary_min: int = 30
@@ -101,6 +102,8 @@ class OnlineConfig:
             raise ValueError("frame reranking weights must sum to 1")
         if not 0.0 <= self.qa_similarity_threshold <= 1.0:
             raise ValueError("qa_similarity_threshold must be between 0 and 1")
+        if not 0.0 <= self.qa_vqa_agreement_similarity <= 1.0:
+            raise ValueError("qa_vqa_agreement_similarity must be between 0 and 1")
         if self.portfolio_max_per_video > 100:
             raise ValueError("portfolio_max_per_video must not exceed submission limit")
         if self.portfolio_primary_min > self.portfolio_max_per_video:

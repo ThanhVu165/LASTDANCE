@@ -192,9 +192,11 @@ def build_qa_candidates(
     warnings: list[str] = []
     question = plan.question or plan.raw_query
     for rank, video in enumerate(hypotheses):
-        frames = video.best_frames[:12]
-        if not frames or rank >= config.qa_answer_video_top_k:
+        if not video.best_frames or rank >= config.qa_answer_video_top_k:
             continue
+        # Answer once per candidate video, then expose the larger frame pool for
+        # review/submission. VLM providers select their own compact context.
+        frames = video.best_frames[: config.portfolio_max_per_video]
         locator = min(1.0, max(0.0, 0.6 * video.video_score + 0.4 * frames[0].final_score))
         # Locator confidence controls auto-accept only. It must never prevent an
         # answer attempt on the configured Top-N candidate videos.

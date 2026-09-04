@@ -32,7 +32,7 @@ package, device, threshold, weight source và weight hash.
 Chạy từ root repository sau khi bootstrap theo `docs/ENVIRONMENT_SETUP.md`:
 
 ```powershell
-$env:AIC_DATA = "D:\path\to\aic-data"
+$env:AIC_DATA = "data"
 .\scripts\run_offline_windows.ps1 `
   -Module scripts.environment_doctor `
   -PythonArguments @("--profile", "offline-local")
@@ -43,12 +43,12 @@ $env:AIC_DATA = "D:\path\to\aic-data"
 
 .\scripts\run_offline_windows.ps1 `
   -Module scripts.detect_shots `
-  -PythonArguments @("$env:AIC_DATA\videos\L01_V001.mp4")
+  -PythonArguments @("F:\LASTDANCE-DATA\videos\L01_V001.mp4")
 
 .\scripts\run_offline_windows.ps1 `
   -Module scripts.build_keyframe_plan `
   -PythonArguments @(
-    "$env:AIC_DATA\videos\L01_V001.mp4",
+    "F:\LASTDANCE-DATA\videos\L01_V001.mp4",
     "$env:AIC_DATA\shots\L01_V001.json"
   )
 
@@ -192,6 +192,50 @@ thái Ready của toàn pipeline.
 Closure Visual ngày 27/08/2026: local đã build và validate PASS `clip.faiss` (dim 512),
 `siglip.faiss` (dim 768) và `eva_clip.faiss` (dim 768), mỗi index có đúng 293.336 UID/873
 video, 9 source batch, finite/L2 norm và checkpoint/resume verified. Các artifact này nằm
-dưới `AIC_DATA/index` và không được commit vào Git.
+dưới `data/index` và không được commit vào Git.
+
+## Nhánh 3 — Offline ASR (Audio Stream Recognition)
+
+**Tóm tắt:** ASR chạy Kaggle GPU độc lập, không tranh quota với visual embedding. Engine là
+**faster-whisper large-v3** (CTranslate2, đa ngôn ngữ, tự phát hiện vi/en). Luồng:
+
+1. **Local CPU:** Extract 16kHz mono FLAC từ video bằng FFmpeg
+   - Input: `F:\LASTDANCE-DATA\videos\*.mp4` (external path)
+   - Output: `data/audio/{video_id}.flac` (project folder)
+   - Command: `python -m scripts.extract_asr_audio --collection --videos-root "F:\LASTDANCE-DATA\videos" --data-root "data"`
+   - Checkpoint/resume qua `CheckpointStore`
+
+2. **Kaggle GPU (2–4 worker song song):** Transcribe FLAC → segment list (per-video JSONL
+   envelope)
+   - faster-whisper large-v3 + Silero VAD filter (mặc định)
+   - Checkpoint mỗi 5 video, push batch archival lên HF Dataset
+
+3. **Local snapshot builder:** Union JSONL từ 9 batch → `asr.sqlite` (FTS5, 7 cột khớp
+   contract `online/fts.py`) + `coverage.json`
+   - Source: `data/hf-cache/asr/archives/batch-XX/`
+   - Output: `data/asr/snapshots/asr-snapshot-...`
+
+4. **Publish:** Atomic copy snapshot vào `data/index/asr.sqlite` (Online đã mount sẵn)
+
+**Paths cheatsheet:**
+- Videos (external): `F:\LASTDANCE-DATA\videos` — KHÔNG sửa, đường dẫn cố định
+- Project data: `data/` hoặc set `$env:AIC_DATA = "data"`
+- Audio output: `data/audio/`
+- HF cache: `data/hf-cache/asr/`
+- Snapshots: `data/asr/snapshots/`
+- Final index: `data/index/asr.sqlite` ← Online đọc từ đây
+
+**Đặc điểm:**
+- Không cascade/tầng như OCR — chỉ một engine, tránh rủi ro deadline
+- Batch = tái dùng 9 ranh giới video OCR/visual (`batch-01`..`batch-09`), cùng
+  `video_set_sha256`
+- HF namespace: `asr/audio/batch-XX/`, `asr/archives/batch-XX/`, `asr/snapshots/...`
+- Granularity = per-video (1 JSONL = 1 video + list segment), không như OCR per-keyframe
+
+**Publishing Criteria (§2A.4):** Video `complete=true` khi thỏa audio thật + segment hợp lệ
++ keyframe_uid_nearest match + no error status + FTS5 query text đúng.
+
+**Runbook đầy đủ:** `docs/ASR_RUNBOOK.md` — chứa lệnh extract local, push HF, chạy Kaggle,
+pull snapshot, build/publish index, checkpoint drill, troubleshoot degraded mode.
 
 Xem `docs/ENVIRONMENT_SETUP.md` để dựng environment giống nhau trên Windows/Kaggle.

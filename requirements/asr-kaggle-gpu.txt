@@ -1,0 +1,4 @@
+# Conservative pins compatible with the Kaggle Python 3.12 CUDA image.
+faster-whisper==1.1.1
+ctranslate2==4.5.0
+huggingface-hub==0.27.1

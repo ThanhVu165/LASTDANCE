@@ -60,7 +60,9 @@ def _handle(message: dict[str, Any]) -> dict[str, Any]:
             layout=SimpleNamespace(data=SimpleNamespace(keyframes=Path("."))),
         )
         answer, confidence, warnings = QwenVQAAnswerer(
-            registry, str(message["model_id"])
+            registry,
+            str(message["model_id"]),
+            agreement_similarity=float(message.get("agreement_similarity", 0.6)),
         ).answer(
             video_id=str(message["video_id"]),
             frames=frames,

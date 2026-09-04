@@ -56,6 +56,7 @@ _DESCRIPTIVE_TEXT_COUNT = re.compile(
 )
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_GEMINI_PLANNER_TIMEOUT_SECONDS = 45.0
 
 
 def _scenes(text: str) -> list[str]:
@@ -302,8 +303,11 @@ description_original must be an exact contiguous span copied from the raw query.
 retrieval_query_en and global_context_en faithfully to English. known_text_literals may contain
 only exact text whose value is already stated verbatim in the raw query; a description such as
 'six Chinese characters' or an unknown number being asked about is not a literal. Put script,
-colour, count and placement clues into visual_text_attributes. For QA, answer_target describes the
-unknown value and value_is_unknown must be true. Use source visual, ocr, asr or mixed. Return:
+colour, count and placement clues into visual_text_attributes. For QA, answer_target.question
+must be a faithful English translation of the question, matching the language of
+retrieval_query_en and global_context_en; do not copy the original-language question.
+answer_target describes the unknown value and value_is_unknown must be true. Use source visual,
+ocr, asr or mixed. Return:
 {"global_context_en":"string","retrieval_queries":["faithful English","optional discriminative English"],
 "query_units":[{"unit_id":"unit-1","description_original":"exact raw span",
 "retrieval_query_en":"English visual description","roles":["VIDEO_LOCATOR","TARGET_MOMENT"],
@@ -702,7 +706,7 @@ def _validate_provider_plan(
             value_type = "free_text"
         source = _answer_source(raw_query)
         answer_target = {
-            "question": _question_text(raw_query),
+            "question": str(target_payload.get("question") or "").strip() or _question_text(raw_query),
             "value_type": value_type,
             "source": source,
             "evidence_unit_ids": evidence_ids,
@@ -901,7 +905,19 @@ def get_query_planner(environment: dict[str, str] | None = None) -> PlannerChain
     if api_key:
         requested_model = values.get("AIC_GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip()
         model = requested_model or DEFAULT_GEMINI_MODEL
-        providers.append(GeminiQueryPlanner(api_key, model=model))
+        raw_timeout = values.get(
+            "AIC_GEMINI_PLANNER_TIMEOUT_SECONDS",
+            str(DEFAULT_GEMINI_PLANNER_TIMEOUT_SECONDS),
+        ).strip()
+        try:
+            planner_timeout = float(raw_timeout)
+        except ValueError as error:
+            raise ValueError(
+                "AIC_GEMINI_PLANNER_TIMEOUT_SECONDS must be a positive number"
+            ) from error
+        if planner_timeout <= 0:
+            raise ValueError("AIC_GEMINI_PLANNER_TIMEOUT_SECONDS must be a positive number")
+        providers.append(GeminiQueryPlanner(api_key, model=model, timeout=planner_timeout))
     model_id = values.get("AIC_QWEN_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
     default_worker = "1" if os.name == "nt" else "0"
     if values.get("AIC_TORCH_WORKER", default_worker) != "0":

@@ -223,6 +223,51 @@ class OnlineTaskHeadTests(unittest.TestCase):
         self.assertTrue(all(item.answer == "42" for item in candidates))
         self.assertTrue(all(item.requires_review for item in candidates))
 
+    def test_qa_builds_top_100_from_up_to_forty_frames_per_answered_video(self):
+        class Answerer:
+            def __init__(self):
+                self.context_sizes = []
+
+            def answer(self, *, video_id, frames, question):
+                self.context_sizes.append(len(frames))
+                return "42", 0.9, []
+
+        hypotheses = [
+            VideoHypothesis(
+                video_id=f"v{index}",
+                video_score=1.0 - index * 0.1,
+                coverage=1.0,
+                model_consensus=1.0,
+                best_frames=[
+                    frame(f"v{index}", index * 1000 + offset, float(offset), 1.0 - offset / 200, f"s{offset}")
+                    for offset in range(40)
+                ],
+            )
+            for index in range(1, 4)
+        ]
+        plan = UnifiedQueryPlan(
+            raw_query="What number is shown?",
+            caption_en="What number is shown?",
+            retrieval_queries=["number shown"],
+            scenes=["number shown"],
+            question="What number is shown?",
+            answer_source="visual",
+        )
+        answerer = Answerer()
+        candidates, _warnings = build_qa_candidates(
+            hypotheses,
+            plan,
+            answerer=answerer,
+            max_results=100,
+            config=OnlineConfig(),
+        )
+        self.assertEqual(answerer.context_sizes, [40, 40, 40])
+        self.assertEqual(len(candidates), 100)
+        counts = [sum(item.video_id == video for item in candidates) for video in ("v1", "v2", "v3")]
+        self.assertEqual(sum(counts), 100)
+        self.assertGreaterEqual(counts[0], 30)
+        self.assertTrue(all(0 < count <= 40 for count in counts))
+
     def test_trake_beam_enforces_same_video_and_increasing_time(self):
         first = RetrievalResult(
             evidence=[frame("v1", 1, 1.0, 0.9, "s1"), frame("v2", 2, 1.0, 0.8, "s1")],

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import base64
+import difflib
 import io
 import math
 import os
@@ -15,6 +16,7 @@ from PIL import Image, ImageDraw, ImageOps
 from shared.schemas.online import FrameEvidence
 
 from .artifacts import ArtifactRegistry
+from .config import OnlineConfig
 from .gemini import GeminiJsonClient
 from .qwen_runtime import get_qwen_components
 from .task_heads import UnavailableAnswerer, VideoAnswerer
@@ -38,10 +40,38 @@ def _normalize_answer(text: str) -> str:
     return re.sub(r"[^\w]+", " ", text.casefold()).strip()
 
 
+def _answers_agree(first: str, second: str, *, threshold: float = 0.6) -> bool:
+    """Accept equivalent free-text answers without relaxing numeric agreement."""
+
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("answer agreement threshold must be between 0 and 1")
+    normalized_first = _normalize_answer(first)
+    normalized_second = _normalize_answer(second)
+    if not normalized_first or not normalized_second:
+        return False
+    if normalized_first == normalized_second:
+        return True
+    first_numbers = tuple(re.findall(r"\d+", normalized_first))
+    second_numbers = tuple(re.findall(r"\d+", normalized_second))
+    if first_numbers or second_numbers:
+        return first_numbers == second_numbers
+    return (
+        difflib.SequenceMatcher(None, normalized_first, normalized_second).ratio()
+        >= threshold
+    )
+
+
 class QwenVQAAnswerer(VideoAnswerer):
-    def __init__(self, registry: ArtifactRegistry, model_id: str = "Qwen/Qwen3-VL-2B-Instruct") -> None:
+    def __init__(
+        self,
+        registry: ArtifactRegistry,
+        model_id: str = "Qwen/Qwen3-VL-2B-Instruct",
+        *,
+        agreement_similarity: float = 0.6,
+    ) -> None:
         self.registry = registry
         self.model_id = model_id
+        self.agreement_similarity = agreement_similarity
         self._model: Any = None
         self._processor: Any = None
 
@@ -137,15 +167,31 @@ class QwenVQAAnswerer(VideoAnswerer):
             second, second_confidence = self._ask(frames, question, "Independently verify the answer and reject unsupported guesses.")
         except Exception as error:
             return "Uncertain", 0.0, [f"Qwen VQA failed for {video_id}: {type(error).__name__}: {error}"]
-        if not first or _normalize_answer(first) != _normalize_answer(second):
+        if not _answers_agree(
+            first,
+            second,
+            threshold=self.agreement_similarity,
+        ):
             return "Uncertain", 0.0, [f"Qwen VQA prompts disagreed for {video_id}: {first!r} vs {second!r}"]
-        return first[:100], min(first_confidence, second_confidence), []
+        answer, confidence = (
+            (first, first_confidence)
+            if first_confidence >= second_confidence
+            else (second, second_confidence)
+        )
+        return answer[:100], min(confidence, first_confidence, second_confidence), []
 
 
 class WorkerQwenVQAAnswerer(VideoAnswerer):
     """VQA proxy sharing the same isolated Torch/Qwen process as the planner."""
 
-    def __init__(self, registry: ArtifactRegistry, model_id: str, client: Any = None) -> None:
+    def __init__(
+        self,
+        registry: ArtifactRegistry,
+        model_id: str,
+        client: Any = None,
+        *,
+        agreement_similarity: float = 0.6,
+    ) -> None:
         if client is None:
             from .torch_worker_client import get_torch_worker_client
 
@@ -153,6 +199,7 @@ class WorkerQwenVQAAnswerer(VideoAnswerer):
         self.registry = registry
         self.model_id = model_id
         self.client = client
+        self.agreement_similarity = agreement_similarity
 
     def answer(
         self,
@@ -172,15 +219,23 @@ class WorkerQwenVQAAnswerer(VideoAnswerer):
             model_id=self.model_id,
             video_id=video_id,
             question=question,
+            agreement_similarity=self.agreement_similarity,
             frames=payload,
         )
         return str(response["answer"]), float(response["confidence"]), [str(item) for item in response["warnings"]]
 
 
 class GeminiVQAAnswerer(VideoAnswerer):
-    def __init__(self, registry: ArtifactRegistry, client: GeminiJsonClient) -> None:
+    def __init__(
+        self,
+        registry: ArtifactRegistry,
+        client: GeminiJsonClient,
+        *,
+        agreement_similarity: float = 0.6,
+    ) -> None:
         self.registry = registry
         self.client = client
+        self.agreement_similarity = agreement_similarity
 
     def _ask(
         self,
@@ -237,11 +292,20 @@ class GeminiVQAAnswerer(VideoAnswerer):
             return "Uncertain", 0.0, [
                 f"Gemini VQA failed for {video_id}: {type(error).__name__}: {error}"
             ]
-        if not first.strip() or _normalize_answer(first) != _normalize_answer(second):
+        if not _answers_agree(
+            first,
+            second,
+            threshold=self.agreement_similarity,
+        ):
             return "Uncertain", 0.0, [
                 f"Gemini VQA prompts disagreed for {video_id}: {first!r} vs {second!r}"
             ]
-        return first, min(first_confidence, second_confidence), []
+        answer, confidence = (
+            (first, first_confidence)
+            if first_confidence >= second_confidence
+            else (second, second_confidence)
+        )
+        return answer[:100], min(confidence, first_confidence, second_confidence), []
 
 
 class FallbackVQAAnswerer(VideoAnswerer):
@@ -284,16 +348,38 @@ class FallbackVQAAnswerer(VideoAnswerer):
         return "Uncertain", 0.0, warnings or ["VQA unavailable; answer requires operator review"]
 
 
-def get_video_answerer(registry: ArtifactRegistry) -> VideoAnswerer:
+def get_video_answerer(
+    registry: ArtifactRegistry,
+    config: OnlineConfig | None = None,
+) -> VideoAnswerer:
+    agreement_similarity = config.qa_vqa_agreement_similarity if config is not None else 0.6
     providers: list[VideoAnswerer] = []
     api_key = os.environ.get("GEMINI_API_KEY")
     if api_key:
-        providers.append(GeminiVQAAnswerer(registry, GeminiJsonClient(api_key)))
+        providers.append(
+            GeminiVQAAnswerer(
+                registry,
+                GeminiJsonClient(api_key),
+                agreement_similarity=agreement_similarity,
+            )
+        )
     if os.environ.get("AIC_ENABLE_QWEN_VQA") == "1":
         model_id = os.environ.get("AIC_QWEN_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
         default_worker = "1" if os.name == "nt" else "0"
         if os.environ.get("AIC_TORCH_WORKER", default_worker) != "0":
-            providers.append(WorkerQwenVQAAnswerer(registry, model_id))
+            providers.append(
+                WorkerQwenVQAAnswerer(
+                    registry,
+                    model_id,
+                    agreement_similarity=agreement_similarity,
+                )
+            )
         else:
-            providers.append(QwenVQAAnswerer(registry, model_id))
+            providers.append(
+                QwenVQAAnswerer(
+                    registry,
+                    model_id,
+                    agreement_similarity=agreement_similarity,
+                )
+            )
     return FallbackVQAAnswerer(providers) if providers else UnavailableAnswerer()

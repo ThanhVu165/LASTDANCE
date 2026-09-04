@@ -113,7 +113,7 @@ class OnlineEngine:
         self.registry = registry or ArtifactRegistry.load(layout, deep=deep_preflight)
         self.planner = planner or get_query_planner()
         self.encoders = encoders or get_text_encoder_registry(device="cpu")
-        self.answerer = answerer or get_video_answerer(self.registry)
+        self.answerer = answerer or get_video_answerer(self.registry, self.config)
         self.verifier = verifier if verifier is not None else get_video_verifier(self.registry)
         self.retriever = FrameRetriever(self.registry, self.encoders, self.config)
         self._clock = clock

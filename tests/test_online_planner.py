@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from online.planners import (
     DEFAULT_GEMINI_MODEL,
+    DEFAULT_GEMINI_PLANNER_TIMEOUT_SECONDS,
     GeminiQueryPlanner,
     RuleBasedQueryPlanner,
     _validate_provider_plan,
@@ -282,6 +283,52 @@ class OnlinePlannerTests(unittest.TestCase):
             }
         )
         self.assertEqual(chain.providers[0].model, "gemini-3.5-flash")
+
+    def test_gemini_planner_timeout_is_configurable(self):
+        chain = get_query_planner(
+            {
+                "GEMINI_API_KEY": "secret-key",
+                "AIC_GEMINI_PLANNER_TIMEOUT_SECONDS": "37.5",
+                "AIC_TORCH_WORKER": "0",
+            }
+        )
+        self.assertEqual(chain.providers[0].timeout, 37.5)
+        default_chain = get_query_planner(
+            {
+                "GEMINI_API_KEY": "secret-key",
+                "AIC_TORCH_WORKER": "0",
+            }
+        )
+        self.assertEqual(
+            default_chain.providers[0].timeout,
+            DEFAULT_GEMINI_PLANNER_TIMEOUT_SECONDS,
+        )
+
+    def test_provider_english_question_is_preserved_for_qa(self):
+        plan = _validate_provider_plan(
+            "Con số trên biển báo là số mấy?",
+            {
+                "global_context_en": "A sign is visible.",
+                "query_units": [
+                    {
+                        "unit_id": "unit-1",
+                        "description_original": "Con số trên biển báo",
+                        "retrieval_query_en": "the number on the sign",
+                        "roles": ["TARGET_MOMENT", "ANSWER_EVIDENCE"],
+                    }
+                ],
+                "answer_target": {
+                    "question": "What number is on the sign?",
+                    "value_type": "number",
+                    "source": "visual",
+                    "evidence_unit_ids": ["unit-1"],
+                    "value_is_unknown": True,
+                },
+            },
+            "gemini",
+            TaskType.QA,
+        )
+        self.assertEqual(plan.question, "What number is on the sign?")
 
 
 if __name__ == "__main__":

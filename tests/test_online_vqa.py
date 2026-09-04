@@ -7,11 +7,20 @@ from PIL import Image
 from offline.config import DataLayout
 from online.artifacts import ArtifactRegistry, CatalogFrame, FrameCatalog
 from online.config import OnlineLayout
-from online.vqa import QwenVQAAnswerer
+from online.vqa import QwenVQAAnswerer, _answers_agree
 from shared.schemas.online import FrameEvidence
 
 
 class OnlineVqaTests(unittest.TestCase):
+    def test_fuzzy_agreement_accepts_equivalent_unknown_answers(self):
+        self.assertTrue(_answers_agree("Không xác định được", "Chưa xác định được"))
+
+    def test_fuzzy_agreement_rejects_different_numbers(self):
+        self.assertFalse(_answers_agree("3 chiếc bánh", "5 chiếc bánh"))
+
+    def test_fuzzy_agreement_rejects_different_colors(self):
+        self.assertFalse(_answers_agree("đỏ", "xanh"))
+
     def test_contact_sheet_is_one_six_panel_chronological_image(self):
         with tempfile.TemporaryDirectory() as directory:
             layout = OnlineLayout(DataLayout(Path(directory)))

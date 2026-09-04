@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "model_family": "faster-whisper",
+  "model_id": "Systran/faster-whisper-large-v3",
+  "model_name": "large-v3",
+  "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+  "source": "Hugging Face / Systran",
+  "compute_type": "float16",
+  "device": "cuda",
+  "expected_vram_gib": 5.2,
+  "language_policy": ["vi", "en"],
+  "checksum_sha256": "0ae7d8c76b1e61e0d0acc0de5f9f9063f11b478f567362e001ff3cba08b35faa",
+  "verification_status": "verified",
+  "production_allowed": true,
+  "notes": "Verified on Kaggle GPU with faster-whisper large-v3, CUDA FP16, revision edaa852ec7e145841d8ffdb056a99866b5f0a478."
+}

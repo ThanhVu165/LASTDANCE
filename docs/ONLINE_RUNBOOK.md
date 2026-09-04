@@ -133,6 +133,7 @@ $env:AIC_QWEN_VQA_MAX_NEW_TOKENS = "64"
 $env:AIC_GEMINI_SAFE_RPM = "14"
 $env:AIC_GEMINI_SAFE_TPM = "225000"
 $env:AIC_GEMINI_SAFE_RPD = "450"
+$env:AIC_GEMINI_PLANNER_TIMEOUT_SECONDS = "45"
 ```
 
 Gemini key chỉ được đọc từ environment và gửi bằng header `x-goog-api-key`; không đặt key
@@ -247,6 +248,14 @@ chỉ đặt `requires_review=true`. Unknown OCR/ASR được đọc theo frame 
 confidence tiếp tục sang Gemini/Qwen. `Uncertain` chỉ là warning/trạng thái review, không tạo
 QACandidate và không được export. Answer thật còn `requires_review=true` cũng bị workspace
 chặn cho tới khi operator xác minh.
+
+Khi dùng OCR snapshot development, phải đặt `AIC_OCR_SNAPSHOT_DIR` trong chính terminal chạy
+`streamlit run` và restart toàn bộ Streamlit sau mỗi lần đổi snapshot; refresh trang không xóa
+`ArtifactRegistry` đã cache. Kiểm tra `torch.cuda.is_available()` trước khi kỳ vọng planner/VQA
+Qwen hoạt động; chỉ bật `AIC_ALLOW_QWEN_CPU=1` khi chấp nhận độ chậm CPU. Hai lần hỏi VQA được
+coi là đồng thuận khi câu trả lời chuẩn hóa giống nhau hoặc đạt
+`qa_vqa_agreement_similarity` (mặc định 0,6); nếu một câu có chữ số, toàn bộ chuỗi số phải
+trùng chính xác, nên fuzzy matching không thể biến “3” thành “5”.
 
 Nếu Windows báo `OMP Error #15`, cấu hình đang chạy Torch trực tiếp trong process FAISS:
 đặt lại `AIC_TORCH_WORKER=1` và restart process. Không dùng biến bỏ qua duplicate OpenMP.

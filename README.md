@@ -23,6 +23,8 @@ frame-level: mỗi keyframe có vector riêng và được join bằng `keyframe
    `IndexIDMap` độc lập trên CPU local sau khi embedding batch hoàn tất.
 10. [`docs/OCR_RUNBOOK.md`](docs/OCR_RUNBOOK.md) - OCR phân tầng CRAFT → EasyOCR → Vintern
     → Gemini residual, snapshot SQLite development, JSONL resume và đồng bộ HF Dataset.
+11. [`docs/ASR_RUNBOOK.md`](docs/ASR_RUNBOOK.md) - ASR faster-whisper large-v3 chạy Kaggle
+    GPU độc lập (Nhánh 3), audio extraction local, batch checkpoint, snapshot + publish index.
 
 ASR contract nằm trực tiếp trong `BASELINE_SPEC.md` §2A. Không duy trì spec/kiến trúc
 archived song song; lịch sử quyết định nằm trong Git và Changelog của baseline.
@@ -59,11 +61,12 @@ tests/            # contract/regression test
 ## Chạy lát cắt offline hiện tại
 
 Bootstrap Windows dựng Python 3.11 + FFmpeg đã pin, kiểm tra checksum, doctor, compile và
-test. Toàn bộ dữ liệu được định vị qua `AIC_DATA`; không ghi path tuyệt đối vào artifact.
+test. Toàn bộ dữ liệu (ngoài videos) được định vị trong project folder `data/` (hoặc set env
+`AIC_DATA`, default `data/`). Videos nằm ngoài project tại `F:\LASTDANCE-DATA\videos`.
 
 ```powershell
 .\scripts\bootstrap_miniforge_windows.ps1
-$env:AIC_DATA = "D:\path\to\aic-data"
+$env:AIC_DATA = "data"  # project folder (hoặc mount khác nếu cần)
 .\scripts\run_offline_windows.ps1 `
   -Module scripts.build_inventory -PythonArguments @("--limit", "10")
 ```
